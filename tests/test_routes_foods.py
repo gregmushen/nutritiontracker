@@ -58,6 +58,43 @@ def test_barcode_lookup_caches_global_open_food_facts_result(client, monkeypatch
     assert client.get("/foods/barcode/0889392000863").json()["id"] == r.json()["id"]
 
 
+def test_barcode_refresh_persists_product_metadata(client, db, monkeypatch):
+    barcode = "555"
+    food_id = _seed_food(db, "Old", barcode=barcode, source_code=barcode)
+    db.execute(
+        "UPDATE foods SET source = 'open_food_facts' WHERE id = ?", (food_id,)
+    )
+    db.commit()
+    monkeypatch.setattr(
+        "app.routes.foods.fetch_off_by_barcode",
+        lambda value: {
+            "source": "open_food_facts",
+            "source_code": value,
+            "name": "Refreshed",
+            "barcode": value,
+            "protein_g": 0,
+            "ingredients_text": "Water",
+            "allergens_tags": ["en:milk"],
+            "dietary_tags": [],
+            "categories_tags": ["en:drinks"],
+            "labels_tags": [],
+            "countries_tags": ["en:united-states"],
+            "nutriscore_grade": "a",
+            "nova_group": 1,
+            "product_quantity": 355,
+            "product_quantity_unit": "ml",
+        },
+    )
+
+    response = client.get(f"/foods/barcode/{barcode}")
+
+    assert response.status_code == 200
+    assert response.json()["protein_g"] == 0
+    assert response.json()["ingredients_text"] == "Water"
+    assert response.json()["allergens_tags"] == ["en:milk"]
+    assert response.json()["product_quantity"] == 355
+
+
 def test_create_custom_food(client, db):
     FoodRepository(db).ensure_fts()
     r = client.post("/foods", json={"name": "My Food", "source": "custom",
@@ -71,6 +108,13 @@ def test_update_custom_food(client, db):
     r = client.patch(f"/foods/{fid}", json={"name": "New"})
     assert r.status_code == 200
     assert r.json()["name"] == "New"
+
+
+def test_update_rejects_null_tag_lists(client, db):
+    fid = _seed_food(db, "Old")
+    response = client.patch(f"/foods/{fid}", json={"allergens_tags": None})
+
+    assert response.status_code == 422
 
 
 def test_delete_custom_food(client, db):

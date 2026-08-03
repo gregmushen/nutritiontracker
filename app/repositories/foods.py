@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from app.models.food import NUTRIENT_FIELDS
@@ -35,8 +36,10 @@ class FoodRepository:
     def create(self, *, source: str, name: str, **kwargs) -> int:
         other_fields = [
             "source_code", "brand", "barcode", "image_url", "serving_quantity",
-            "serving_unit", "serving_size_text", "base_quantity", "base_unit",
-            "density_g_per_ml",
+            "serving_unit", "serving_size_text", "ingredients_text",
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags", "nutriscore_grade", "nova_group", "product_quantity",
+            "product_quantity_unit", "base_quantity", "base_unit", "density_g_per_ml",
         ]
         all_fields = other_fields + list(NUTRIENT_FIELDS)
         fields = ["source", "name"]
@@ -44,7 +47,7 @@ class FoodRepository:
         for f in all_fields:
             if f in kwargs:
                 fields.append(f)
-                values.append(kwargs[f])
+                values.append(json.dumps(kwargs[f]) if f.endswith("_tags") else kwargs[f])
         placeholders = ", ".join(["?"] * len(values))
         cols = ", ".join(fields)
         cur = self.conn.execute(
@@ -59,8 +62,10 @@ class FoodRepository:
         name = kwargs.pop("name")
         other_fields = [
             "source_code", "brand", "barcode", "image_url", "serving_quantity",
-            "serving_unit", "serving_size_text", "base_quantity", "base_unit",
-            "density_g_per_ml",
+            "serving_unit", "serving_size_text", "ingredients_text",
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags", "nutriscore_grade", "nova_group", "product_quantity",
+            "product_quantity_unit", "base_quantity", "base_unit", "density_g_per_ml",
         ]
         all_fields = other_fields + list(NUTRIENT_FIELDS)
         fields = ["source", "name"]
@@ -68,7 +73,7 @@ class FoodRepository:
         for f in all_fields:
             if f in kwargs:
                 fields.append(f)
-                values.append(kwargs[f])
+                values.append(json.dumps(kwargs[f]) if f.endswith("_tags") else kwargs[f])
         placeholders = ", ".join(["?"] * len(values))
         cols = ", ".join(fields)
         conflict_clause = ""
@@ -91,13 +96,13 @@ class FoodRepository:
 
     def get(self, food_id: int) -> dict | None:
         row = self.conn.execute("SELECT * FROM foods WHERE id = ?", (food_id,)).fetchone()
-        return dict(row) if row else None
+        return self._deserialize(row)
 
     def get_by_barcode(self, barcode: str) -> dict | None:
         row = self.conn.execute(
             "SELECT * FROM foods WHERE barcode = ?", (barcode,)
         ).fetchone()
-        return dict(row) if row else None
+        return self._deserialize(row)
 
     def search(
         self, query: str, *, source: str | None = None, limit: int = 20, offset: int = 0
@@ -121,11 +126,17 @@ class FoodRepository:
                    LIMIT ? OFFSET ?""",
                 (fts_query, limit, offset),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._deserialize(r) for r in rows]
 
     def update(self, food_id: int, **kwargs) -> bool:
         if not kwargs:
             return False
+        for field in (
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags",
+        ):
+            if field in kwargs and isinstance(kwargs[field], list):
+                kwargs[field] = json.dumps(kwargs[field])
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [food_id]
         self.conn.execute(
@@ -139,3 +150,12 @@ class FoodRepository:
         cur = self.conn.execute("DELETE FROM foods WHERE id = ?", (food_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    @staticmethod
+    def _deserialize(row: sqlite3.Row | None) -> dict | None:
+        if row is None:
+            return None
+        food = dict(row)
+        for field in ("allergens_tags", "dietary_tags", "categories_tags", "labels_tags", "countries_tags"):
+            food[field] = json.loads(food[field])
+        return food

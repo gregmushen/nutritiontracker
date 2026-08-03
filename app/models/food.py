@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class NutrientsPer100(BaseModel):
@@ -63,6 +63,16 @@ class FoodCreate(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] = Field(default_factory=list)
+    dietary_tags: list[str] = Field(default_factory=list)
+    categories_tags: list[str] = Field(default_factory=list)
+    labels_tags: list[str] = Field(default_factory=list)
+    countries_tags: list[str] = Field(default_factory=list)
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     base_quantity: float = 100
     base_unit: str = "g"
     density_g_per_ml: float | None = None
@@ -83,8 +93,31 @@ class FoodUpdate(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] | None = None
+    dietary_tags: list[str] | None = None
+    categories_tags: list[str] | None = None
+    labels_tags: list[str] | None = None
+    countries_tags: list[str] | None = None
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     density_g_per_ml: float | None = None
     nutrients: NutrientsPer100 | None = None
+
+    @field_validator(
+        "allergens_tags",
+        "dietary_tags",
+        "categories_tags",
+        "labels_tags",
+        "countries_tags",
+    )
+    @classmethod
+    def _tags_cannot_be_null(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            raise ValueError("tag lists cannot be null; use [] to clear them")
+        return value
 
 
 class FoodOut(BaseModel):
@@ -98,6 +131,16 @@ class FoodOut(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] = Field(default_factory=list)
+    dietary_tags: list[str] = Field(default_factory=list)
+    categories_tags: list[str] = Field(default_factory=list)
+    labels_tags: list[str] = Field(default_factory=list)
+    countries_tags: list[str] = Field(default_factory=list)
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     base_quantity: float = 100
     base_unit: str = "g"
     density_g_per_ml: float | None = None

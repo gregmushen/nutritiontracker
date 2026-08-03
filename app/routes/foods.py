@@ -7,6 +7,24 @@ from app.services.food_search import FoodSearchService
 
 router = APIRouter(prefix="/foods", tags=["foods"])
 
+OFF_REFRESH_FIELDS = (
+    "brand",
+    "image_url",
+    "serving_quantity",
+    "serving_unit",
+    "serving_size_text",
+    "ingredients_text",
+    "allergens_tags",
+    "dietary_tags",
+    "categories_tags",
+    "labels_tags",
+    "countries_tags",
+    "nutriscore_grade",
+    "nova_group",
+    "product_quantity",
+    "product_quantity_unit",
+)
+
 
 def _repo(request: Request) -> FoodRepository:
     return FoodRepository(request.app.state.db)
@@ -51,7 +69,11 @@ def get_by_barcode(request: Request, barcode: str):
     if not _has_nutrients(food) and food.get("source") == "open_food_facts":
         fresh = fetch_off_by_barcode(barcode)
         if fresh:
-            updates = {k: fresh[k] for k in NUTRIENT_FIELDS if fresh.get(k)}
+            updates = {
+                key: fresh[key]
+                for key in (*NUTRIENT_FIELDS, *OFF_REFRESH_FIELDS)
+                if key in fresh and fresh[key] is not None
+            }
             if updates:
                 repo.update(food["id"], **updates)
                 food = repo.get(food["id"])
