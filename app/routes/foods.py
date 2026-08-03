@@ -1,11 +1,30 @@
 from fastapi import APIRouter, HTTPException, Request
 
+from app.auth import current_user_id
 from app.models.food import NUTRIENT_FIELDS, FoodCreate, FoodOut, FoodUpdate
 from app.providers.open_food_facts import fetch_off_by_barcode
 from app.repositories.foods import FoodRepository
 from app.services.food_search import FoodSearchService
 
 router = APIRouter(prefix="/foods", tags=["foods"])
+
+OFF_REFRESH_FIELDS = (
+    "brand",
+    "image_url",
+    "serving_quantity",
+    "serving_unit",
+    "serving_size_text",
+    "ingredients_text",
+    "allergens_tags",
+    "dietary_tags",
+    "categories_tags",
+    "labels_tags",
+    "countries_tags",
+    "nutriscore_grade",
+    "nova_group",
+    "product_quantity",
+    "product_quantity_unit",
+)
 
 
 def _repo(request: Request) -> FoodRepository:
@@ -23,7 +42,9 @@ def search_foods(
     """Search the food database by name or brand. Supports prefix matching ('chick' matches 'chicken breast').
     Deduplicates results when the same food appears in multiple sources — prefers the record with more complete nutrient data.
     Filter by source: `all`, `custom`, `open_food_facts`, `food_data_central`."""
-    return _search_svc(request).search(q, source=source, limit=limit, offset=offset)
+    return _search_svc(request).search(
+        q, source=source, user_id=current_user_id(request), limit=limit, offset=offset
+    )
 
 
 def _has_nutrients(food: dict) -> bool:
@@ -40,7 +61,8 @@ def get_by_barcode(request: Request, barcode: str):
     the caller can PATCH it with correct values.
     """
     repo = _repo(request)
-    food = repo.get_by_barcode(barcode)
+    user_id = current_user_id(request)
+    food = repo.get_by_barcode(barcode, user_id=user_id)
     if not food:
         fresh = fetch_off_by_barcode(barcode)
         if not fresh:
@@ -51,10 +73,14 @@ def get_by_barcode(request: Request, barcode: str):
     if not _has_nutrients(food) and food.get("source") == "open_food_facts":
         fresh = fetch_off_by_barcode(barcode)
         if fresh:
-            updates = {k: fresh[k] for k in NUTRIENT_FIELDS if fresh.get(k)}
+            updates = {
+                key: fresh[key]
+                for key in (*NUTRIENT_FIELDS, *OFF_REFRESH_FIELDS)
+                if key in fresh and fresh[key] is not None
+            }
             if updates:
                 repo.update(food["id"], **updates)
-                food = repo.get(food["id"])
+                food = repo.get(food["id"], user_id=user_id)
 
     return food
 
@@ -62,7 +88,7 @@ def get_by_barcode(request: Request, barcode: str):
 @router.get("/{food_id}", response_model=FoodOut, summary="Get food by ID")
 def get_food(request: Request, food_id: int):
     """Retrieve a single food record by its ID."""
-    food = _repo(request).get(food_id)
+    food = _repo(request).get(food_id, user_id=current_user_id(request))
     if not food:
         raise HTTPException(404, "Food not found")
     return food
@@ -75,15 +101,16 @@ def create_food(request: Request, body: FoodCreate):
     nutrients = body.nutrients.model_dump()
     data = body.model_dump(exclude={"nutrients"})
     data.update(nutrients)
-    food_id = repo.create(**data)
-    return repo.get(food_id)
+    food_id = repo.create(**data, owner_user_id=current_user_id(request))
+    return repo.get(food_id, user_id=current_user_id(request))
 
 
 @router.patch("/{food_id}", response_model=FoodOut, summary="Update custom food")
 def update_food(request: Request, food_id: int, body: FoodUpdate):
     """Update fields on a custom food record."""
     repo = _repo(request)
-    if not repo.get(food_id):
+    food = repo.get(food_id, user_id=current_user_id(request))
+    if not food or food["owner_user_id"] != current_user_id(request):
         raise HTTPException(404, "Food not found")
     updates = body.model_dump(exclude_unset=True)
     if "nutrients" in updates and updates["nutrients"] is not None:
@@ -92,12 +119,15 @@ def update_food(request: Request, food_id: int, body: FoodUpdate):
     elif "nutrients" in updates:
         updates.pop("nutrients")
     repo.update(food_id, **updates)
-    return repo.get(food_id)
+    return repo.get(food_id, user_id=current_user_id(request))
 
 
 @router.delete("/{food_id}", status_code=204, summary="Delete custom food")
 def delete_food(request: Request, food_id: int):
     """Delete a custom food record. Only custom foods can be deleted."""
     repo = _repo(request)
+    food = repo.get(food_id, user_id=current_user_id(request))
+    if not food or food["owner_user_id"] != current_user_id(request):
+        raise HTTPException(404, "Food not found")
     if not repo.delete(food_id):
         raise HTTPException(404, "Food not found")

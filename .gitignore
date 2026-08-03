@@ -9,4 +9,5 @@ build/
 .pytest_cache/
 data/
 .env
+*.env
 .kamal/secrets

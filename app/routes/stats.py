@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Request
+
+from app.auth import current_user_id
 from app.models.food import NutrientsPer100
 from app.models.stats import DailyStats, RangeDailyStats
 from app.repositories.activity import ActivityRepository
 from app.repositories.diary import DiaryRepository
-from app.config import settings
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -40,11 +41,12 @@ def _compute_daily(entries: list[dict], date: str) -> dict:
 def daily_stats(request: Request, date: str):
     """Get total nutrients and per-meal breakdown for a given date. All four meal types (breakfast, lunch, dinner, snack) are always included — meals with no entries show zero values."""
     diary = DiaryRepository(request.app.state.db)
-    entries = diary.list_by_date(user_id=settings.default_user_id, date=date)
+    user_id = current_user_id(request)
+    entries = diary.list_by_date(user_id=user_id, date=date)
     result = _compute_daily(entries, date)
 
     activity_repo = ActivityRepository(request.app.state.db)
-    activity_row = activity_repo.get_daily(user_id=settings.default_user_id, date=date)
+    activity_row = activity_repo.get_daily(user_id=user_id, date=date)
     if activity_row:
         result["activity"] = {
             "steps": activity_row["steps"],
@@ -63,12 +65,12 @@ def range_stats(request: Request, start: str, end: str):
         """SELECT DISTINCT date FROM diary_entries
            WHERE user_id = ? AND date >= ? AND date <= ?
            ORDER BY date""",
-        (settings.default_user_id, start, end),
+        (current_user_id(request), start, end),
     ).fetchall()
     results = []
     for row in rows:
         date = row["date"]
-        entries = diary.list_by_date(user_id=settings.default_user_id, date=date)
+        entries = diary.list_by_date(user_id=current_user_id(request), date=date)
         daily = _compute_daily(entries, date)
         daily.pop("meals")
         results.append(daily)

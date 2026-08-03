@@ -1,7 +1,7 @@
 """Build an optimized nutrition database from USDA and Open Food Facts exports.
 
 Usage:
-    python -m scripts.rebuild_food_database OUTPUT_DB OFF_JSONL_GZ \
+    python -m scripts.rebuild_food_database OUTPUT_DB OFF_PARQUET \
         --foundation-json=FILE --sr-legacy-json=FILE \
         [--foundation-csv-dir=DIR] [--country=en:united-states]
 """
@@ -37,7 +37,7 @@ def rebuild_database(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_db", type=Path)
-    parser.add_argument("off_jsonl", type=Path)
+    parser.add_argument("off_parquet", type=Path)
     parser.add_argument("--foundation-json", required=True, type=Path)
     parser.add_argument("--sr-legacy-json", required=True, type=Path)
     parser.add_argument("--foundation-csv-dir", type=Path)
@@ -46,7 +46,7 @@ def main() -> None:
 
     rebuild_database(
         args.output_db,
-        args.off_jsonl,
+        args.off_parquet,
         foundation_json_path=args.foundation_json,
         sr_legacy_json_path=args.sr_legacy_json,
         foundation_csv_dir=args.foundation_csv_dir,

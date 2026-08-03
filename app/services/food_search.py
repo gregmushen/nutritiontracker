@@ -17,11 +17,13 @@ class FoodSearchService:
         self.repo = repo
 
     def search(
-        self, query: str, *, source: str | None = None,
+        self, query: str, *, source: str | None = None, user_id: int | None = None,
         limit: int = 20, offset: int = 0,
     ) -> list[dict]:
         # Fetch extra results to allow for dedup shrinkage
-        raw = self.repo.search(query, source=source, limit=limit * 2, offset=offset)
+        raw = self.repo.search(
+            query, source=source, user_id=user_id, limit=limit * 2, offset=offset
+        )
         deduped = self._deduplicate(raw)
         return deduped[:limit]
 

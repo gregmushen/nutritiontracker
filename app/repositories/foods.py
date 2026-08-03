@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from app.models.food import NUTRIENT_FIELDS
@@ -32,19 +33,23 @@ class FoodRepository:
             END;
         """)
 
-    def create(self, *, source: str, name: str, **kwargs) -> int:
+    def create(
+        self, *, source: str, name: str, owner_user_id: int | None = None, **kwargs
+    ) -> int:
         other_fields = [
             "source_code", "brand", "barcode", "image_url", "serving_quantity",
-            "serving_unit", "serving_size_text", "base_quantity", "base_unit",
-            "density_g_per_ml",
+            "serving_unit", "serving_size_text", "ingredients_text",
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags", "nutriscore_grade", "nova_group", "product_quantity",
+            "product_quantity_unit", "base_quantity", "base_unit", "density_g_per_ml",
         ]
         all_fields = other_fields + list(NUTRIENT_FIELDS)
-        fields = ["source", "name"]
-        values = [source, name]
+        fields = ["source", "name", "owner_user_id"]
+        values = [source, name, owner_user_id]
         for f in all_fields:
             if f in kwargs:
                 fields.append(f)
-                values.append(kwargs[f])
+                values.append(json.dumps(kwargs[f]) if f.endswith("_tags") else kwargs[f])
         placeholders = ", ".join(["?"] * len(values))
         cols = ", ".join(fields)
         cur = self.conn.execute(
@@ -57,18 +62,21 @@ class FoodRepository:
         """Same as create() but without committing — caller manages transactions for bulk imports."""
         source = kwargs.pop("source")
         name = kwargs.pop("name")
+        owner_user_id = kwargs.pop("owner_user_id", None)
         other_fields = [
             "source_code", "brand", "barcode", "image_url", "serving_quantity",
-            "serving_unit", "serving_size_text", "base_quantity", "base_unit",
-            "density_g_per_ml",
+            "serving_unit", "serving_size_text", "ingredients_text",
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags", "nutriscore_grade", "nova_group", "product_quantity",
+            "product_quantity_unit", "base_quantity", "base_unit", "density_g_per_ml",
         ]
         all_fields = other_fields + list(NUTRIENT_FIELDS)
-        fields = ["source", "name"]
-        values = [source, name]
+        fields = ["source", "name", "owner_user_id"]
+        values = [source, name, owner_user_id]
         for f in all_fields:
             if f in kwargs:
                 fields.append(f)
-                values.append(kwargs[f])
+                values.append(json.dumps(kwargs[f]) if f.endswith("_tags") else kwargs[f])
         placeholders = ", ".join(["?"] * len(values))
         cols = ", ".join(fields)
         conflict_clause = ""
@@ -76,12 +84,20 @@ class FoodRepository:
             updates = ", ".join(
                 f"{field} = excluded.{field}"
                 for field in fields
-                if field not in ("source", "source_code")
+                if field not in ("source", "source_code", "owner_user_id")
             )
-            conflict_clause = (
-                " ON CONFLICT(source, source_code) WHERE source_code IS NOT NULL"
-                f" DO UPDATE SET {updates}, updated_at = datetime('now')"
-            )
+            if owner_user_id is None:
+                conflict_clause = (
+                    " ON CONFLICT(source, source_code) "
+                    "WHERE source_code IS NOT NULL AND owner_user_id IS NULL"
+                    f" DO UPDATE SET {updates}, updated_at = datetime('now')"
+                )
+            else:
+                conflict_clause = (
+                    " ON CONFLICT(owner_user_id, source, source_code) "
+                    "WHERE source_code IS NOT NULL AND owner_user_id IS NOT NULL"
+                    f" DO UPDATE SET {updates}, updated_at = datetime('now')"
+                )
         cur = self.conn.execute(
             f"INSERT INTO foods ({cols}) VALUES ({placeholders})"
             f"{conflict_clause} RETURNING id",
@@ -89,43 +105,63 @@ class FoodRepository:
         )
         return cur.fetchone()[0]
 
-    def get(self, food_id: int) -> dict | None:
-        row = self.conn.execute("SELECT * FROM foods WHERE id = ?", (food_id,)).fetchone()
-        return dict(row) if row else None
+    def get(self, food_id: int, *, user_id: int | None = None) -> dict | None:
+        query = "SELECT * FROM foods WHERE id = ?"
+        values: list[int] = [food_id]
+        if user_id is not None:
+            query += " AND (owner_user_id IS NULL OR owner_user_id = ?)"
+            values.append(user_id)
+        row = self.conn.execute(query, values).fetchone()
+        return self._deserialize(row)
 
-    def get_by_barcode(self, barcode: str) -> dict | None:
-        row = self.conn.execute(
-            "SELECT * FROM foods WHERE barcode = ?", (barcode,)
-        ).fetchone()
-        return dict(row) if row else None
+    def get_by_barcode(self, barcode: str, *, user_id: int | None = None) -> dict | None:
+        query = "SELECT * FROM foods WHERE barcode = ?"
+        values: list[int | str] = [barcode]
+        if user_id is not None:
+            query += " AND (owner_user_id IS NULL OR owner_user_id = ?)"
+            values.append(user_id)
+        row = self.conn.execute(query, values).fetchone()
+        return self._deserialize(row)
 
     def search(
-        self, query: str, *, source: str | None = None, limit: int = 20, offset: int = 0
+        self, query: str, *, source: str | None = None, user_id: int | None = None,
+        limit: int = 20, offset: int = 0,
     ) -> list[dict]:
         fts_query = " ".join(f"{term}*" for term in query.strip().split())
+        ownership_clause = ""
+        ownership_values: tuple[int, ...] = ()
+        if user_id is not None:
+            ownership_clause = " AND (f.owner_user_id IS NULL OR f.owner_user_id = ?)"
+            ownership_values = (user_id,)
         if source and source != "all":
             rows = self.conn.execute(
                 """SELECT f.* FROM foods_fts fts
                    JOIN foods f ON f.id = fts.rowid
-                   WHERE foods_fts MATCH ? AND f.source = ?
+                   WHERE foods_fts MATCH ? AND f.source = ?""" + ownership_clause + """
                    ORDER BY rank
                    LIMIT ? OFFSET ?""",
-                (fts_query, source, limit, offset),
+                (fts_query, source, *ownership_values, limit, offset),
             ).fetchall()
         else:
             rows = self.conn.execute(
                 """SELECT f.* FROM foods_fts fts
                    JOIN foods f ON f.id = fts.rowid
-                   WHERE foods_fts MATCH ?
+                   WHERE foods_fts MATCH ?""" + ownership_clause + """
                    ORDER BY rank
                    LIMIT ? OFFSET ?""",
-                (fts_query, limit, offset),
+                (fts_query, *ownership_values, limit, offset),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._deserialize(r) for r in rows]
 
     def update(self, food_id: int, **kwargs) -> bool:
         if not kwargs:
             return False
+        for field in (
+            "allergens_tags", "dietary_tags", "categories_tags", "labels_tags",
+            "countries_tags",
+        ):
+            if field in kwargs and isinstance(kwargs[field], list):
+                kwargs[field] = json.dumps(kwargs[field])
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [food_id]
         self.conn.execute(
@@ -139,3 +175,12 @@ class FoodRepository:
         cur = self.conn.execute("DELETE FROM foods WHERE id = ?", (food_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    @staticmethod
+    def _deserialize(row: sqlite3.Row | None) -> dict | None:
+        if row is None:
+            return None
+        food = dict(row)
+        for field in ("allergens_tags", "dietary_tags", "categories_tags", "labels_tags", "countries_tags"):
+            food[field] = json.loads(food[field])
+        return food

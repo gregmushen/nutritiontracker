@@ -16,10 +16,19 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            token_hash TEXT UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS foods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL CHECK(source IN ('custom','open_food_facts','food_data_central','recipe')),
             source_code TEXT,
+            owner_user_id INTEGER REFERENCES users(id),
             name TEXT NOT NULL,
             brand TEXT,
             barcode TEXT,
@@ -27,6 +36,16 @@ def init_schema(conn: sqlite3.Connection) -> None:
             serving_quantity REAL,
             serving_unit TEXT,
             serving_size_text TEXT,
+            ingredients_text TEXT,
+            allergens_tags TEXT NOT NULL DEFAULT '[]',
+            dietary_tags TEXT NOT NULL DEFAULT '[]',
+            categories_tags TEXT NOT NULL DEFAULT '[]',
+            labels_tags TEXT NOT NULL DEFAULT '[]',
+            countries_tags TEXT NOT NULL DEFAULT '[]',
+            nutriscore_grade TEXT,
+            nova_group INTEGER,
+            product_quantity REAL,
+            product_quantity_unit TEXT,
             base_quantity REAL NOT NULL DEFAULT 100,
             base_unit TEXT NOT NULL DEFAULT 'g',
             density_g_per_ml REAL,
@@ -178,8 +197,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_foods_barcode ON foods(barcode);
         CREATE INDEX IF NOT EXISTS idx_foods_source ON foods(source);
+        CREATE INDEX IF NOT EXISTS idx_foods_owner ON foods(owner_user_id);
         CREATE INDEX IF NOT EXISTS idx_foods_source_code ON foods(source, source_code);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_source_code_unique ON foods(source, source_code) WHERE source_code IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_shared_source_code_unique
+            ON foods(source, source_code)
+            WHERE source_code IS NOT NULL AND owner_user_id IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_owned_source_code_unique
+            ON foods(owner_user_id, source, source_code)
+            WHERE source_code IS NOT NULL AND owner_user_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary_entries(user_id, date);
         CREATE INDEX IF NOT EXISTS idx_diary_food_name ON diary_entries(user_id, food_name);
         CREATE INDEX IF NOT EXISTS idx_weight_user_date ON weight_entries(user_id, date);
@@ -229,3 +254,19 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_step_obs_user_date ON step_observations(user_id, local_date);
         CREATE INDEX IF NOT EXISTS idx_daily_activity_user_date ON daily_activity(user_id, date);
     """)
+    seed_default_user(conn)
+
+
+def seed_default_user(conn: sqlite3.Connection) -> None:
+    """Ensure the user every unowned row is attributed to actually exists.
+
+    Owned rows carry ``owner_user_id = settings.default_user_id``, and that
+    column has a foreign key onto ``users``. Seeding a hardcoded id 1 while the
+    deployment is configured for a different one leaves the configured user
+    missing, so every write fails the constraint.
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, name) VALUES (?, 'Default user')",
+        (settings.default_user_id,),
+    )
+    conn.commit()

@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.config import settings
+from app.auth import current_user_id
 from app.models.kitchen import (
     FavoriteMeal,
     FavoriteMealCreate,
@@ -20,7 +20,6 @@ from app.services.kitchen import (
     generate_shopping_items_for_meals,
     rank_favorite_meals,
 )
-
 
 router = APIRouter(prefix="/kitchen", tags=["kitchen"])
 
@@ -56,7 +55,7 @@ def _ingredient_payload(item) -> dict:
 def upsert_inventory_item(request: Request, body: InventoryItemCreate):
     canonical = canonicalize_ingredient_name(body.name)
     return _repo(request).upsert_inventory_item(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         display_name=body.name.strip(),
         canonical_name=canonical,
         status=body.status,
@@ -77,7 +76,7 @@ def list_inventory(
     q: str | None = None,
 ):
     return _repo(request).list_inventory(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         status=status,
         location=location,
         category=category,
@@ -90,7 +89,7 @@ def list_inventory(
 )
 def delete_inventory_item(request: Request, item_id: int):
     if not _repo(request).delete_inventory_item(
-        user_id=settings.default_user_id, item_id=item_id
+        user_id=current_user_id(request), item_id=item_id
     ):
         raise HTTPException(404, "Inventory item not found")
 
@@ -101,7 +100,7 @@ def delete_inventory_item(request: Request, item_id: int):
 def create_favorite_meal(request: Request, body: FavoriteMealCreate):
     ingredients = [_ingredient_payload(item) for item in body.ingredients]
     return _repo(request).create_favorite_meal(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         name=body.name,
         tags=body.tags,
         prep_time_minutes=body.prep_time_minutes,
@@ -114,7 +113,7 @@ def create_favorite_meal(request: Request, body: FavoriteMealCreate):
 
 @router.get("/meals", response_model=list[FavoriteMeal], summary="List favorite meals")
 def list_favorite_meals(request: Request):
-    return _repo(request).list_favorite_meals(user_id=settings.default_user_id)
+    return _repo(request).list_favorite_meals(user_id=current_user_id(request))
 
 
 @router.post(
@@ -123,9 +122,9 @@ def list_favorite_meals(request: Request):
     summary="Mark favorite meal made",
 )
 def mark_meal_made(request: Request, meal_id: int):
-    made_at = datetime.now(timezone.utc).isoformat()
+    made_at = datetime.now(UTC).isoformat()
     meal = _repo(request).mark_meal_made(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         meal_id=meal_id,
         made_at=made_at,
     )
@@ -141,8 +140,8 @@ def mark_meal_made(request: Request, meal_id: int):
 )
 def rank_meals(request: Request, body: MealMatchRequest):
     repo = _repo(request)
-    meals = repo.list_favorite_meals(user_id=settings.default_user_id)
-    inventory = repo.list_inventory(user_id=settings.default_user_id)
+    meals = repo.list_favorite_meals(user_id=current_user_id(request))
+    inventory = repo.list_inventory(user_id=current_user_id(request))
     return rank_favorite_meals(
         meals=meals,
         inventory=inventory,
@@ -159,7 +158,7 @@ def rank_meals(request: Request, body: MealMatchRequest):
 def add_shopping_item(request: Request, body: ShoppingListItemCreate):
     canonical = canonicalize_ingredient_name(body.name)
     return _repo(request).upsert_shopping_list_item(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         display_name=body.name.strip(),
         canonical_name=canonical,
         source=body.source,
@@ -175,7 +174,7 @@ def add_shopping_item(request: Request, body: ShoppingListItemCreate):
 )
 def list_shopping_items(request: Request, checked: bool | None = None):
     return _repo(request).list_shopping_items(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         checked=checked,
     )
 
@@ -190,17 +189,17 @@ def generate_shopping_list(request: Request, body: ShoppingGenerateRequest):
     meals = []
     for meal_id in body.meal_ids:
         meal = repo.get_favorite_meal(
-            user_id=settings.default_user_id, meal_id=meal_id
+            user_id=current_user_id(request), meal_id=meal_id
         )
         if not meal:
             raise HTTPException(404, f"Favorite meal {meal_id} not found")
         meals.append(meal)
 
-    inventory = repo.list_inventory(user_id=settings.default_user_id)
+    inventory = repo.list_inventory(user_id=current_user_id(request))
     generated = generate_shopping_items_for_meals(meals=meals, inventory=inventory)
     return [
         repo.upsert_shopping_list_item(
-            user_id=settings.default_user_id,
+            user_id=current_user_id(request),
             display_name=item["display_name"],
             canonical_name=item["canonical_name"],
             source=item["source"],
@@ -217,7 +216,7 @@ def generate_shopping_list(request: Request, body: ShoppingGenerateRequest):
 )
 def patch_shopping_item(request: Request, item_id: int, body: ShoppingItemPatch):
     item = _repo(request).set_shopping_item_checked(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         item_id=item_id,
         checked=body.checked,
     )
