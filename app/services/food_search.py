@@ -1,15 +1,12 @@
 from app.repositories.foods import FoodRepository
-from app.models.food import NutrientsPer100
+from app.sources import FOOD_SOURCES, resolve_source_filter
 
-NUTRIENT_FIELDS = list(NutrientsPer100.model_fields.keys())
+SOURCE_TIER_WEIGHT = 2.0
+MAX_SEARCH_LIMIT = 100
+MAX_SEARCH_OFFSET = 10_000
 
-
-def _nutrient_completeness(food: dict) -> int:
-    return sum(1 for f in NUTRIENT_FIELDS if (food.get(f) or 0) > 0)
-
-
-def _normalize_name(name: str) -> str:
-    return " ".join(name.lower().strip().split())
+# Cap the ranking penalty so an unregistered source remains reachable.
+MAX_RANKING_TIER = max(source.tier for source in FOOD_SOURCES) + 1
 
 
 class FoodSearchService:
@@ -17,39 +14,28 @@ class FoodSearchService:
         self.repo = repo
 
     def search(
-        self, query: str, *, source: str | None = None,
-        limit: int = 20, offset: int = 0,
+        self,
+        query: str,
+        *,
+        source: str | None = None,
+        user_id: int | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[dict]:
-        # Fetch extra results to allow for dedup shrinkage
-        raw = self.repo.search(query, source=source, limit=limit * 2, offset=offset)
-        deduped = self._deduplicate(raw)
-        return deduped[:limit]
+        if not 1 <= limit <= MAX_SEARCH_LIMIT:
+            raise ValueError(f"limit must be between 1 and {MAX_SEARCH_LIMIT}")
+        if not 0 <= offset <= MAX_SEARCH_OFFSET:
+            raise ValueError(f"offset must be between 0 and {MAX_SEARCH_OFFSET}")
 
-    def _deduplicate(self, foods: list[dict]) -> list[dict]:
-        seen_barcodes: dict[str, int] = {}
-        seen_names: dict[str, int] = {}
-        result: list[dict] = []
-
-        for food in foods:
-            barcode = food.get("barcode")
-            norm_name = _normalize_name(food.get("name", ""))
-            dup_idx = None
-
-            if barcode and barcode in seen_barcodes:
-                dup_idx = seen_barcodes[barcode]
-            elif norm_name in seen_names:
-                dup_idx = seen_names[norm_name]
-
-            if dup_idx is not None:
-                existing = result[dup_idx]
-                if _nutrient_completeness(food) > _nutrient_completeness(existing):
-                    result[dup_idx] = food
-                continue
-
-            idx = len(result)
-            if barcode:
-                seen_barcodes[barcode] = idx
-            seen_names[norm_name] = idx
-            result.append(food)
-
-        return result
+        page = self.repo.search(
+            query,
+            sources=resolve_source_filter(source),
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+            quality_weight=SOURCE_TIER_WEIGHT,
+            max_quality_tier=MAX_RANKING_TIER,
+        )
+        for food in page:
+            food.pop("relevance", None)
+        return page

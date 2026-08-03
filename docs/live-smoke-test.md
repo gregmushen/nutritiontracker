@@ -1,6 +1,12 @@
 # Nutrition Tracker — Live Smoke Test Plan
 
-**Base URL:** `https://n.paracosmlab.com`  
+**Base URL:** `$NT_PUBLIC_URL` — set it before running anything below:
+
+```bash
+export NT_PUBLIC_URL=https://nutrition.example.com
+```
+
+If you use `deploy/deploy.env`, `NT_PUBLIC_URL` is already defined there.  
 **Auth:** `Authorization: Bearer <NT_BEARER_TOKEN>`
 
 ---
@@ -10,7 +16,7 @@
 Verifies the app is running and `/health` is publicly accessible.
 
 ```bash
-curl -s https://n.paracosmlab.com/health
+curl -s "$NT_PUBLIC_URL/health"
 ```
 
 **Expected:** `{"status":"ok","version":"0.1.0"}`
@@ -22,7 +28,7 @@ curl -s https://n.paracosmlab.com/health
 Verifies protected endpoints reject unauthenticated requests.
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" https://n.paracosmlab.com/foods/search?q=chicken
+curl -s -o /dev/null -w "%{http_code}" "$NT_PUBLIC_URL/foods/search?q=chicken"
 ```
 
 **Expected:** `401`
@@ -48,7 +54,7 @@ curl -s -X POST \
       "fat_g": 0.2
     }
   }' \
-  "https://n.paracosmlab.com/foods"
+  "$NT_PUBLIC_URL/foods"
 ```
 
 **Expected:** Returns `FoodOut` with an `id` field. Capture this ID for subsequent tests.
@@ -61,7 +67,7 @@ Verifies full-text search finds the food we just created.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/foods/search?q=apple&limit=5"
+  "$NT_PUBLIC_URL/foods/search?q=apple&limit=5"
 ```
 
 **Expected:** JSON array containing the Test Apple entry.
@@ -78,11 +84,11 @@ curl -s -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"food_id": <ID>, "amount": 150, "unit": "g", "meal_type": "snack"}' \
-  "https://n.paracosmlab.com/diary/2026-05-19/entries"
+  "$NT_PUBLIC_URL/diary/2026-05-19/entries"
 
 # GET entries for the day
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/diary/2026-05-19"
+  "$NT_PUBLIC_URL/diary/2026-05-19"
 ```
 
 **Expected:** POST returns `DiaryEntry` with `id`. GET returns array containing it.
@@ -95,7 +101,7 @@ Verifies nutrition rollup for the diary entries logged above.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/stats/daily/2026-05-19"
+  "$NT_PUBLIC_URL/stats/daily/2026-05-19"
 ```
 
 **Expected:** `DailyStats` with non-zero `calories`, `protein_g`, `carbs_g`, `fat_g`.
@@ -110,11 +116,11 @@ curl -s -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"date": "2026-05-19", "weight_kg": 80.5, "notes": "morning"}' \
-  "https://n.paracosmlab.com/weight"
+  "$NT_PUBLIC_URL/weight"
 
 # GET range
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/weight?start=2026-05-19&end=2026-05-19"
+  "$NT_PUBLIC_URL/weight?start=2026-05-19&end=2026-05-19"
 ```
 
 **Expected:** POST returns `WeightEntry` with `id`. GET returns array containing it.
@@ -136,11 +142,11 @@ curl -s -X POST \
     "sleep_quality": 7,
     "tags": ["test"]
   }' \
-  "https://n.paracosmlab.com/journal"
+  "$NT_PUBLIC_URL/journal"
 
 # GET by date
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/journal/2026-05-19"
+  "$NT_PUBLIC_URL/journal/2026-05-19"
 ```
 
 **Expected:** POST returns `JournalEntry` with `id` and all scores. GET returns same entry.
@@ -164,7 +170,7 @@ curl -s -X POST \
     "steps_total_today": 6500,
     "timezone": "America/Los_Angeles"
   }' \
-  "https://n.paracosmlab.com/imports/activity/steps"
+  "$NT_PUBLIC_URL/imports/activity/steps"
 
 # Second import — lower count should trigger anomaly
 curl -s -X POST \
@@ -178,11 +184,11 @@ curl -s -X POST \
     "steps_total_today": 3000,
     "timezone": "America/Los_Angeles"
   }' \
-  "https://n.paracosmlab.com/imports/activity/steps"
+  "$NT_PUBLIC_URL/imports/activity/steps"
 
 # GET today's summary
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://n.paracosmlab.com/activity/daily/2026-05-19"
+  "$NT_PUBLIC_URL/activity/daily/2026-05-19"
 ```
 
 **Expected:**
@@ -207,7 +213,7 @@ curl -s -X POST \
       {"food_id": <ID>, "amount": 200, "unit": "g"}
     ]
   }' \
-  "https://n.paracosmlab.com/recipes"
+  "$NT_PUBLIC_URL/recipes"
 ```
 
 **Expected:** Returns `Recipe` with computed `total_calories: 104` (52 kcal/100g × 200g).
@@ -221,7 +227,7 @@ Verifies the schema endpoint is live (useful for AI agents).
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $TOKEN" \
-  https://n.paracosmlab.com/openapi.json
+  "$NT_PUBLIC_URL/openapi.json"
 ```
 
 **Expected:** `200`
@@ -233,7 +239,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 Create inventory:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/inventory \
+curl -s -X POST "$NT_PUBLIC_URL/kitchen/inventory" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Eggs","status":"have","location":"fridge"}'
@@ -242,7 +248,7 @@ curl -s -X POST https://n.paracosmlab.com/kitchen/inventory \
 Create a favorite meal:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/meals \
+curl -s -X POST "$NT_PUBLIC_URL/kitchen/meals" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Spinach Eggs","tags":["breakfast","high_protein"],"effort":"low","ingredients":[{"name":"Eggs","role":"required"},{"name":"Spinach","role":"optional"}]}'
@@ -251,7 +257,7 @@ curl -s -X POST https://n.paracosmlab.com/kitchen/meals \
 Rank meals:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/matches \
+curl -s -X POST "$NT_PUBLIC_URL/kitchen/matches" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"effort":"low"}'

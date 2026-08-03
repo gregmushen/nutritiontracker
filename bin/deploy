@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Deploy the application code to the host and restart the service.
+#
+# Usage:
+#   bin/deploy [--ref <git-ref>]
+#
+# The host runs a plain git checkout under systemd, so deploying is a fetch,
+# a dependency sync, an Alembic upgrade and a unit restart.
+
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
+
+require_vars NT_DEPLOY_DIR NT_DEPLOY_SERVICE NT_DEPLOY_DB
+umask 077
+
+REF="${NT_DEPLOY_BRANCH:-main}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ref) REF="$2"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+echo "Deploying $REF to $NT_DEPLOY_HOST:$NT_DEPLOY_DIR"
+
+remote "set -euo pipefail
+umask 077
+cd '$NT_DEPLOY_DIR'
+git fetch --all --prune
+if git show-ref --verify --quiet 'refs/remotes/origin/$REF'; then
+  git checkout '$REF'
+  git pull --ff-only origin '$REF'
+else
+  git checkout --detach '$REF'
+fi
+.venv/bin/pip install -q -e .
+NT_DB_PATH='$NT_DEPLOY_DB' .venv/bin/alembic upgrade head
+sudo systemctl restart '$NT_DEPLOY_SERVICE'
+sleep 3
+systemctl is-active '$NT_DEPLOY_SERVICE'"
+
+echo "Checking health"
+remote "curl -fsS http://127.0.0.1:${NT_APP_PORT:-8000}/health" && echo
+echo "Deployed."

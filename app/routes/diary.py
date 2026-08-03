@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request
-from app.models.diary import DiaryEntryCreate, DiaryEntryUpdate, DiaryEntry
+
+from app.auth import current_user_id
+from app.models.diary import DiaryEntry, DiaryEntryCreate, DiaryEntryUpdate
 from app.repositories.diary import DiaryRepository
 from app.repositories.foods import FoodRepository
-from app.services.diary import compute_entry_nutrients, build_food_snapshot
+from app.services.diary import build_food_snapshot, compute_entry_nutrients
 from app.services.unit_conversion import convert_to_grams
-from app.config import settings
 
 router = APIRouter(tags=["diary"])
 
@@ -21,7 +22,7 @@ def _food_repo(request: Request) -> FoodRepository:
 def search_entries(request: Request, q: str):
     """Search all diary entries where the food name contains the query string (case-insensitive). Returns results newest first."""
     return _diary_repo(request).search_by_food_name(
-        user_id=settings.default_user_id, query=q
+        user_id=current_user_id(request), query=q
     )
 
 
@@ -29,7 +30,7 @@ def search_entries(request: Request, q: str):
 def list_entries(request: Request, date: str):
     """Get all diary entries for the given date (YYYY-MM-DD format)."""
     return _diary_repo(request).list_by_date(
-        user_id=settings.default_user_id, date=date
+        user_id=current_user_id(request), date=date
     )
 
 
@@ -37,7 +38,8 @@ def list_entries(request: Request, date: str):
 def create_entry(request: Request, date: str, body: DiaryEntryCreate):
     """Log a food to the diary. Automatically converts the amount to grams, computes nutrient totals, and snapshots the food record."""
     food_repo = _food_repo(request)
-    food = food_repo.get(body.food_id)
+    user_id = current_user_id(request)
+    food = food_repo.get(body.food_id, user_id=user_id)
     if not food:
         raise HTTPException(404, "Food not found")
 
@@ -47,12 +49,14 @@ def create_entry(request: Request, date: str, body: DiaryEntryCreate):
         serving_quantity=food.get("serving_quantity"),
         serving_unit=food.get("serving_unit"),
     )
-    nutrients = compute_entry_nutrients(food, conversion.grams)
+    nutrients = compute_entry_nutrients(
+        food, conversion.amount_in(food.get("base_unit", "g"))
+    )
     snapshot = build_food_snapshot(food)
 
     diary_repo = _diary_repo(request)
     entry_id = diary_repo.create(
-        user_id=settings.default_user_id, date=date,
+        user_id=user_id, date=date,
         meal_type=body.meal_type, food_id=body.food_id,
         food_snapshot=snapshot, food_name=snapshot.get("name", ""),
         amount=body.amount, unit=body.unit, grams=conversion.grams,
@@ -66,7 +70,7 @@ def update_entry(request: Request, entry_id: int, body: DiaryEntryUpdate):
     """Update the amount, unit, or meal type of a diary entry. Nutrient totals are recomputed if amount or unit changes."""
     diary_repo = _diary_repo(request)
     entry = diary_repo.get(entry_id)
-    if not entry:
+    if not entry or entry["user_id"] != current_user_id(request):
         raise HTTPException(404, "Entry not found")
 
     updates = body.model_dump(exclude_unset=True)
@@ -81,7 +85,9 @@ def update_entry(request: Request, entry_id: int, body: DiaryEntryUpdate):
             serving_unit=food.get("serving_unit"),
         )
         updates["grams"] = conversion.grams
-        updates["nutrients_total"] = compute_entry_nutrients(food, conversion.grams)
+        updates["nutrients_total"] = compute_entry_nutrients(
+            food, conversion.amount_in(food.get("base_unit", "g"))
+        )
 
     diary_repo.update(entry_id, **updates)
     return diary_repo.get(entry_id)
@@ -90,5 +96,9 @@ def update_entry(request: Request, entry_id: int, body: DiaryEntryUpdate):
 @router.delete("/diary/entries/{entry_id}", status_code=204, summary="Delete a diary entry")
 def delete_entry(request: Request, entry_id: int):
     """Delete a diary entry by ID."""
-    if not _diary_repo(request).delete(entry_id):
+    diary_repo = _diary_repo(request)
+    entry = diary_repo.get(entry_id)
+    if not entry or entry["user_id"] != current_user_id(request):
+        raise HTTPException(404, "Entry not found")
+    if not diary_repo.delete(entry_id):
         raise HTTPException(404, "Entry not found")

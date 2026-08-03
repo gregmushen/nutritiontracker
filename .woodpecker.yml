@@ -33,13 +33,22 @@ steps:
       - apk add --no-cache openssh-client curl git docker-cli docker-cli-buildx build-base
       - gem install kamal --no-document -q
       - mkdir -p ~/.ssh
-      - echo "$DEPLOY_SSH_KEY" > ~/.ssh/stupidclaw_garageband_ed25519
-      - chmod 600 ~/.ssh/stupidclaw_garageband_ed25519
+      - echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+      - chmod 600 ~/.ssh/deploy_key
+      - export NT_DEPLOY_SSH_KEY=~/.ssh/deploy_key
       - printf "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n" > ~/.ssh/config
       - printf "NT_BEARER_TOKEN=%s\nTUNNEL_TOKEN=%s\nKAMAL_REGISTRY_PASSWORD=%s\n" "$NT_BEARER_TOKEN" "$CLOUDFLARE_TUNNEL_TOKEN" "$KAMAL_REGISTRY_PASSWORD" > .kamal/secrets
       - kamal deploy
       - kamal accessory boot cloudflared 2>/dev/null || kamal accessory reboot cloudflared
     environment:
+      # config/deploy.yml reads its target from the environment rather than
+      # carrying it, so CI supplies the same values from secrets.
+      NT_DEPLOY_HOST:
+        from_secret: NT_DEPLOY_HOST
+      NT_DEPLOY_USER:
+        from_secret: NT_DEPLOY_USER
+      NT_PUBLIC_HOST:
+        from_secret: NT_PUBLIC_HOST
       DEPLOY_SSH_KEY:
         from_secret: deploy_ssh_key
       NT_BEARER_TOKEN:

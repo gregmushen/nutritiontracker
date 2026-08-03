@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Load deployment settings and expose $SSH / $SCP_TARGET helpers.
+#
+# Sourced by the bin/ scripts; not meant to be run directly.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${NT_DEPLOY_ENV:-$REPO_ROOT/deploy/deploy.env}"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Missing $ENV_FILE" >&2
+  echo "Create it with: cp deploy/deploy.env.example deploy/deploy.env" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+set -a; source "$ENV_FILE"; set +a
+
+# Only the connection details are needed by every caller. Scripts that drive a
+# systemd host ask for the rest themselves, so a container host can share this
+# file without inventing values it will never use.
+require_vars() {
+  for required in "$@"; do
+    if [[ -z "${!required:-}" ]]; then
+      echo "$required is not set in $ENV_FILE" >&2
+      exit 1
+    fi
+  done
+}
+
+require_vars NT_DEPLOY_HOST NT_DEPLOY_USER
+
+SSH_OPTS=()
+if [[ -n "${NT_DEPLOY_SSH_KEY:-}" ]]; then
+  SSH_OPTS+=(-i "${NT_DEPLOY_SSH_KEY/#\~/$HOME}")
+fi
+
+TARGET="$NT_DEPLOY_USER@$NT_DEPLOY_HOST"
+# bash 3.2 -- still the /bin/bash on macOS -- treats "${arr[@]}" on an empty
+# array as an unbound variable under `set -u`, so expand it through the ${x+y}
+# guard. Without this, deploying from a Mac fails outright whenever the key
+# comes from ~/.ssh/config rather than NT_DEPLOY_SSH_KEY.
+SSH=(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$TARGET")
+
+# rsync's -e takes a command *string* and splits it on whitespace, so it cannot
+# represent a key path containing a space however it is quoted. Reject that up
+# front rather than failing later with an opaque ssh error.
+if [[ "${NT_DEPLOY_SSH_KEY:-}" =~ [[:space:]] ]]; then
+  echo "NT_DEPLOY_SSH_KEY must not contain whitespace: ${NT_DEPLOY_SSH_KEY}" >&2
+  echo "rsync cannot pass such a path through to ssh. Move the key or symlink it." >&2
+  exit 1
+fi
+RSYNC_SSH="ssh ${SSH_OPTS[*]+${SSH_OPTS[*]}}"
+
+remote() { "${SSH[@]}" "$@"; }

@@ -1,60 +1,71 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.sources import SourceType
 
 
 class NutrientsPer100(BaseModel):
-    calories_kcal: float = 0
-    protein_g: float = 0
-    carbs_g: float = 0
-    fat_g: float = 0
-    sugar_g: float = 0
-    added_sugar_g: float = 0
-    saturated_fat_g: float = 0
-    trans_fat_g: float = 0
-    monounsaturated_fat_g: float = 0
-    polyunsaturated_fat_g: float = 0
-    fiber_g: float = 0
-    cholesterol_mg: float = 0
-    caffeine_mg: float = 0
-    sodium_mg: float = 0
-    potassium_mg: float = 0
-    calcium_mg: float = 0
-    iron_mg: float = 0
-    magnesium_mg: float = 0
-    zinc_mg: float = 0
-    phosphorus_mg: float = 0
-    copper_mg: float = 0
-    manganese_mg: float = 0
-    selenium_ug: float = 0
-    chromium_ug: float = 0
-    iodine_ug: float = 0
-    vitamin_a_ug: float = 0
-    vitamin_c_mg: float = 0
-    vitamin_d_ug: float = 0
-    vitamin_e_mg: float = 0
-    vitamin_k_ug: float = 0
-    thiamin_mg: float = 0
-    riboflavin_mg: float = 0
-    vitamin_b6_mg: float = 0
-    vitamin_b12_ug: float = 0
-    niacin_mg: float = 0
-    pantothenic_acid_mg: float = 0
-    biotin_ug: float = 0
-    folate_ug: float = 0
-    folic_acid_ug: float = 0
-    choline_mg: float = 0
+    calories_kcal: float | None = None
+    protein_g: float | None = None
+    carbs_g: float | None = None
+    fat_g: float | None = None
+    sugar_g: float | None = None
+    added_sugar_g: float | None = None
+    saturated_fat_g: float | None = None
+    trans_fat_g: float | None = None
+    monounsaturated_fat_g: float | None = None
+    polyunsaturated_fat_g: float | None = None
+    fiber_g: float | None = None
+    cholesterol_mg: float | None = None
+    caffeine_mg: float | None = None
+    sodium_mg: float | None = None
+    potassium_mg: float | None = None
+    calcium_mg: float | None = None
+    iron_mg: float | None = None
+    magnesium_mg: float | None = None
+    zinc_mg: float | None = None
+    phosphorus_mg: float | None = None
+    copper_mg: float | None = None
+    manganese_mg: float | None = None
+    selenium_ug: float | None = None
+    chromium_ug: float | None = None
+    iodine_ug: float | None = None
+    vitamin_a_ug: float | None = None
+    vitamin_c_mg: float | None = None
+    vitamin_d_ug: float | None = None
+    vitamin_e_mg: float | None = None
+    vitamin_k_ug: float | None = None
+    thiamin_mg: float | None = None
+    riboflavin_mg: float | None = None
+    vitamin_b6_mg: float | None = None
+    vitamin_b12_ug: float | None = None
+    niacin_mg: float | None = None
+    pantothenic_acid_mg: float | None = None
+    biotin_ug: float | None = None
+    folate_ug: float | None = None
+    folic_acid_ug: float | None = None
+    choline_mg: float | None = None
 
 
 NUTRIENT_FIELDS = tuple(NutrientsPer100.model_fields)
 
 
-SourceType = Literal["custom", "open_food_facts", "food_data_central", "recipe"]
+__all__ = [
+    "NUTRIENT_FIELDS",
+    "Food",
+    "FoodCreate",
+    "FoodOut",
+    "FoodSourceOut",
+    "FoodUpdate",
+    "NutrientsPer100",
+    "SourceType",
+]
 
 
 class FoodCreate(BaseModel):
-    source: SourceType = "custom"
+    source: Literal["custom"] = "custom"
     source_code: str | None = None
     name: str
     brand: str | None = None
@@ -63,6 +74,16 @@ class FoodCreate(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] = Field(default_factory=list)
+    dietary_tags: list[str] = Field(default_factory=list)
+    categories_tags: list[str] = Field(default_factory=list)
+    labels_tags: list[str] = Field(default_factory=list)
+    countries_tags: list[str] = Field(default_factory=list)
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     base_quantity: float = 100
     base_unit: str = "g"
     density_g_per_ml: float | None = None
@@ -83,13 +104,52 @@ class FoodUpdate(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] | None = None
+    dietary_tags: list[str] | None = None
+    categories_tags: list[str] | None = None
+    labels_tags: list[str] | None = None
+    countries_tags: list[str] | None = None
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     density_g_per_ml: float | None = None
     nutrients: NutrientsPer100 | None = None
+
+    @field_validator(
+        "allergens_tags",
+        "dietary_tags",
+        "categories_tags",
+        "labels_tags",
+        "countries_tags",
+    )
+    @classmethod
+    def _tags_cannot_be_null(cls, value: list[str] | None) -> list[str]:
+        if value is None:
+            raise ValueError("tag lists cannot be null; use [] to clear them")
+        return value
+
+
+class FoodSourceOut(BaseModel):
+    """A food composition dataset, its licence and its quality tier."""
+
+    code: str
+    label: str
+    publisher: str
+    tier: int
+    license: str
+    url: str = ""
+    citation: str | None = None
+    dataset_version: str | None = None
+    food_count: int = 0
+
+    model_config = {"from_attributes": True}
 
 
 class FoodOut(BaseModel):
     id: int
-    source: SourceType
+    source: str
     source_code: str | None = None
     name: str
     brand: str | None = None
@@ -98,50 +158,60 @@ class FoodOut(BaseModel):
     serving_quantity: float | None = None
     serving_unit: str | None = None
     serving_size_text: str | None = None
+    ingredients_text: str | None = None
+    allergens_tags: list[str] = Field(default_factory=list)
+    dietary_tags: list[str] = Field(default_factory=list)
+    categories_tags: list[str] = Field(default_factory=list)
+    labels_tags: list[str] = Field(default_factory=list)
+    countries_tags: list[str] = Field(default_factory=list)
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+    product_quantity: float | None = None
+    product_quantity_unit: str | None = None
     base_quantity: float = 100
     base_unit: str = "g"
     density_g_per_ml: float | None = None
     # Nutrients (flat, as stored in DB)
-    calories_kcal: float = 0
-    protein_g: float = 0
-    carbs_g: float = 0
-    fat_g: float = 0
-    sugar_g: float = 0
-    added_sugar_g: float = 0
-    saturated_fat_g: float = 0
-    trans_fat_g: float = 0
-    monounsaturated_fat_g: float = 0
-    polyunsaturated_fat_g: float = 0
-    fiber_g: float = 0
-    cholesterol_mg: float = 0
-    caffeine_mg: float = 0
-    sodium_mg: float = 0
-    potassium_mg: float = 0
-    calcium_mg: float = 0
-    iron_mg: float = 0
-    magnesium_mg: float = 0
-    zinc_mg: float = 0
-    phosphorus_mg: float = 0
-    copper_mg: float = 0
-    manganese_mg: float = 0
-    selenium_ug: float = 0
-    chromium_ug: float = 0
-    iodine_ug: float = 0
-    vitamin_a_ug: float = 0
-    vitamin_c_mg: float = 0
-    vitamin_d_ug: float = 0
-    vitamin_e_mg: float = 0
-    vitamin_k_ug: float = 0
-    thiamin_mg: float = 0
-    riboflavin_mg: float = 0
-    vitamin_b6_mg: float = 0
-    vitamin_b12_ug: float = 0
-    niacin_mg: float = 0
-    pantothenic_acid_mg: float = 0
-    biotin_ug: float = 0
-    folate_ug: float = 0
-    folic_acid_ug: float = 0
-    choline_mg: float = 0
+    calories_kcal: float | None = None
+    protein_g: float | None = None
+    carbs_g: float | None = None
+    fat_g: float | None = None
+    sugar_g: float | None = None
+    added_sugar_g: float | None = None
+    saturated_fat_g: float | None = None
+    trans_fat_g: float | None = None
+    monounsaturated_fat_g: float | None = None
+    polyunsaturated_fat_g: float | None = None
+    fiber_g: float | None = None
+    cholesterol_mg: float | None = None
+    caffeine_mg: float | None = None
+    sodium_mg: float | None = None
+    potassium_mg: float | None = None
+    calcium_mg: float | None = None
+    iron_mg: float | None = None
+    magnesium_mg: float | None = None
+    zinc_mg: float | None = None
+    phosphorus_mg: float | None = None
+    copper_mg: float | None = None
+    manganese_mg: float | None = None
+    selenium_ug: float | None = None
+    chromium_ug: float | None = None
+    iodine_ug: float | None = None
+    vitamin_a_ug: float | None = None
+    vitamin_c_mg: float | None = None
+    vitamin_d_ug: float | None = None
+    vitamin_e_mg: float | None = None
+    vitamin_k_ug: float | None = None
+    thiamin_mg: float | None = None
+    riboflavin_mg: float | None = None
+    vitamin_b6_mg: float | None = None
+    vitamin_b12_ug: float | None = None
+    niacin_mg: float | None = None
+    pantothenic_acid_mg: float | None = None
+    biotin_ug: float | None = None
+    folate_ug: float | None = None
+    folic_acid_ug: float | None = None
+    choline_mg: float | None = None
     created_at: datetime
     updated_at: datetime
 

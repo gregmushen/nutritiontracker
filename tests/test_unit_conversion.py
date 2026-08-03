@@ -27,12 +27,22 @@ def test_ml_with_density():
     r = convert_to_grams(100, "ml", density_g_per_ml=1.03)
     assert r.grams == 103
     assert r.approximate is False
+    assert r.amount_in("ml") == 100
 
 
 def test_ml_without_density_uses_water():
     r = convert_to_grams(100, "ml")
     assert r.grams == 100
     assert r.approximate is True
+    assert r.amount_in("ml") == 100
+
+
+def test_weight_to_volume_requires_density():
+    with pytest.raises(ValueError, match="without density"):
+        convert_to_grams(80, "g").amount_in("ml")
+
+    result = convert_to_grams(80, "g", density_g_per_ml=0.8)
+    assert result.amount_in("ml") == 100
 
 
 def test_cup_to_grams():

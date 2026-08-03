@@ -4,7 +4,7 @@
 # Usage:
 #   bin/import-off <path-to-off-jsonl-or-gz> [--country=en:united-states]
 #
-# The file must be on the garageband host (e.g. /home/gregmushen/nutrition-data/).
+# The file must already be on the deployment host (see deploy/deploy.env).
 # The script detects the current running container image automatically.
 #
 # Download the full dump (~12 GB compressed) from:
@@ -12,7 +12,7 @@
 #   Direct: https://openfoodfacts-ds.s3.eu-west-3.amazonaws.com/openfoodfacts-products.jsonl.gz
 #
 # Example — US products only:
-#   bin/import-off /home/gregmushen/nutrition-data/openfoodfacts-products.jsonl.gz \
+#   bin/import-off /srv/nutrition-data/openfoodfacts-products.jsonl.gz \
 #     --country=en:united-states
 
 set -euo pipefail
@@ -26,17 +26,18 @@ HOST_FILE="$1"
 shift
 EXTRA_ARGS=("$@")
 
-HOST="192.168.60.55"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/stupidclaw_garageband_ed25519}"
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no gregmushen@$HOST"
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
 
-IMAGE=$($SSH "docker inspect \$(docker ps --filter name=nutritiontracker-web --format '{{.Names}}' | head -1) --format '{{.Config.Image}}'")
+# Use the `remote` helper rather than rebuilding a scalar ssh command:
+# flattening SSH_OPTS into a string re-splits an SSH key path that
+# contains a space, which deploy.env is documented as allowing.
+IMAGE=$(remote "docker inspect \$(docker ps --filter name=nutritiontracker-web --format '{{.Names}}' | head -1) --format '{{.Config.Image}}'")
 
 echo "Using image: $IMAGE"
 echo "Importing: $HOST_FILE"
 [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && echo "Options: ${EXTRA_ARGS[*]}"
 
-$SSH "docker run --rm \
+remote "docker run --rm \
   -v \$(dirname '$HOST_FILE'):/nutrition-data \
   -v nutritiontracker_data:/data \
   --entrypoint python \
@@ -44,4 +45,4 @@ $SSH "docker run --rm \
   -m scripts.import_off \
   /nutrition-data/\$(basename '$HOST_FILE') \
   /data/nutrition.db \
-  $(printf '%s ' "${EXTRA_ARGS[@]}")"
+  $(printf '%s ' ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})"
