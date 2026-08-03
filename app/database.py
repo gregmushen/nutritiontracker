@@ -2,6 +2,7 @@ import sqlite3
 from pathlib import Path
 
 from app.config import settings
+from app.sources import FOOD_SOURCES
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
@@ -16,10 +17,32 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            token_hash TEXT UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS food_sources (
+            code TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            publisher TEXT NOT NULL,
+            tier INTEGER NOT NULL,
+            license TEXT NOT NULL,
+            url TEXT NOT NULL DEFAULT '',
+            citation TEXT,
+            dataset_version TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS foods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL CHECK(source IN ('custom','open_food_facts','food_data_central','recipe')),
+            source TEXT NOT NULL REFERENCES food_sources(code),
             source_code TEXT,
+            owner_user_id INTEGER REFERENCES users(id),
             name TEXT NOT NULL,
             brand TEXT,
             barcode TEXT,
@@ -27,49 +50,59 @@ def init_schema(conn: sqlite3.Connection) -> None:
             serving_quantity REAL,
             serving_unit TEXT,
             serving_size_text TEXT,
+            ingredients_text TEXT,
+            allergens_tags TEXT NOT NULL DEFAULT '[]',
+            dietary_tags TEXT NOT NULL DEFAULT '[]',
+            categories_tags TEXT NOT NULL DEFAULT '[]',
+            labels_tags TEXT NOT NULL DEFAULT '[]',
+            countries_tags TEXT NOT NULL DEFAULT '[]',
+            nutriscore_grade TEXT,
+            nova_group INTEGER,
+            product_quantity REAL,
+            product_quantity_unit TEXT,
             base_quantity REAL NOT NULL DEFAULT 100,
             base_unit TEXT NOT NULL DEFAULT 'g',
             density_g_per_ml REAL,
-            calories_kcal REAL DEFAULT 0,
-            protein_g REAL DEFAULT 0,
-            carbs_g REAL DEFAULT 0,
-            fat_g REAL DEFAULT 0,
-            sugar_g REAL DEFAULT 0,
-            added_sugar_g REAL DEFAULT 0,
-            saturated_fat_g REAL DEFAULT 0,
-            trans_fat_g REAL DEFAULT 0,
-            monounsaturated_fat_g REAL DEFAULT 0,
-            polyunsaturated_fat_g REAL DEFAULT 0,
-            fiber_g REAL DEFAULT 0,
-            cholesterol_mg REAL DEFAULT 0,
-            caffeine_mg REAL DEFAULT 0,
-            sodium_mg REAL DEFAULT 0,
-            potassium_mg REAL DEFAULT 0,
-            calcium_mg REAL DEFAULT 0,
-            iron_mg REAL DEFAULT 0,
-            magnesium_mg REAL DEFAULT 0,
-            zinc_mg REAL DEFAULT 0,
-            phosphorus_mg REAL DEFAULT 0,
-            copper_mg REAL DEFAULT 0,
-            manganese_mg REAL DEFAULT 0,
-            selenium_ug REAL DEFAULT 0,
-            chromium_ug REAL DEFAULT 0,
-            iodine_ug REAL DEFAULT 0,
-            vitamin_a_ug REAL DEFAULT 0,
-            vitamin_c_mg REAL DEFAULT 0,
-            vitamin_d_ug REAL DEFAULT 0,
-            vitamin_e_mg REAL DEFAULT 0,
-            vitamin_k_ug REAL DEFAULT 0,
-            thiamin_mg REAL DEFAULT 0,
-            riboflavin_mg REAL DEFAULT 0,
-            vitamin_b6_mg REAL DEFAULT 0,
-            vitamin_b12_ug REAL DEFAULT 0,
-            niacin_mg REAL DEFAULT 0,
-            pantothenic_acid_mg REAL DEFAULT 0,
-            biotin_ug REAL DEFAULT 0,
-            folate_ug REAL DEFAULT 0,
-            folic_acid_ug REAL DEFAULT 0,
-            choline_mg REAL DEFAULT 0,
+            calories_kcal REAL,
+            protein_g REAL,
+            carbs_g REAL,
+            fat_g REAL,
+            sugar_g REAL,
+            added_sugar_g REAL,
+            saturated_fat_g REAL,
+            trans_fat_g REAL,
+            monounsaturated_fat_g REAL,
+            polyunsaturated_fat_g REAL,
+            fiber_g REAL,
+            cholesterol_mg REAL,
+            caffeine_mg REAL,
+            sodium_mg REAL,
+            potassium_mg REAL,
+            calcium_mg REAL,
+            iron_mg REAL,
+            magnesium_mg REAL,
+            zinc_mg REAL,
+            phosphorus_mg REAL,
+            copper_mg REAL,
+            manganese_mg REAL,
+            selenium_ug REAL,
+            chromium_ug REAL,
+            iodine_ug REAL,
+            vitamin_a_ug REAL,
+            vitamin_c_mg REAL,
+            vitamin_d_ug REAL,
+            vitamin_e_mg REAL,
+            vitamin_k_ug REAL,
+            thiamin_mg REAL,
+            riboflavin_mg REAL,
+            vitamin_b6_mg REAL,
+            vitamin_b12_ug REAL,
+            niacin_mg REAL,
+            pantothenic_acid_mg REAL,
+            biotin_ug REAL,
+            folate_ug REAL,
+            folic_acid_ug REAL,
+            choline_mg REAL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -178,8 +211,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_foods_barcode ON foods(barcode);
         CREATE INDEX IF NOT EXISTS idx_foods_source ON foods(source);
+        CREATE INDEX IF NOT EXISTS idx_foods_owner ON foods(owner_user_id);
         CREATE INDEX IF NOT EXISTS idx_foods_source_code ON foods(source, source_code);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_source_code_unique ON foods(source, source_code) WHERE source_code IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_shared_source_code_unique
+            ON foods(source, source_code)
+            WHERE source_code IS NOT NULL AND owner_user_id IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_owned_source_code_unique
+            ON foods(owner_user_id, source, source_code)
+            WHERE source_code IS NOT NULL AND owner_user_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary_entries(user_id, date);
         CREATE INDEX IF NOT EXISTS idx_diary_food_name ON diary_entries(user_id, food_name);
         CREATE INDEX IF NOT EXISTS idx_weight_user_date ON weight_entries(user_id, date);
@@ -229,3 +268,52 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_step_obs_user_date ON step_observations(user_id, local_date);
         CREATE INDEX IF NOT EXISTS idx_daily_activity_user_date ON daily_activity(user_id, date);
     """)
+    seed_default_user(conn)
+    seed_food_sources(conn)
+
+
+def seed_default_user(conn: sqlite3.Connection) -> None:
+    """Ensure the user every unowned row is attributed to actually exists.
+
+    Owned rows carry ``owner_user_id = settings.default_user_id``, and that
+    column has a foreign key onto ``users``. Seeding a hardcoded id 1 while the
+    deployment is configured for a different one leaves the configured user
+    missing, so every write fails the constraint.
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, name) VALUES (?, 'Default user')",
+        (settings.default_user_id,),
+    )
+    conn.commit()
+
+
+def seed_food_sources(conn: sqlite3.Connection) -> None:
+    """Upsert the built-in data-source registry.
+
+    Runs on every startup so a deployment picks up newly registered sources
+    and refreshed licence or dataset-version metadata without a migration.
+    """
+    conn.executemany(
+        """
+        INSERT INTO food_sources
+            (code, label, publisher, tier, license, url, citation, dataset_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET
+            label = excluded.label,
+            publisher = excluded.publisher,
+            tier = excluded.tier,
+            license = excluded.license,
+            url = excluded.url,
+            citation = excluded.citation,
+            dataset_version = excluded.dataset_version,
+            updated_at = datetime('now')
+        """,
+        [
+            (
+                s.code, s.label, s.publisher, s.tier, s.license,
+                s.url, s.citation, s.dataset_version,
+            )
+            for s in FOOD_SOURCES
+        ],
+    )
+    conn.commit()

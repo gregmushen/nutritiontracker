@@ -35,6 +35,8 @@ def test_daily_stats(client, db):
     assert data["meals"]["breakfast"]["calories_kcal"] == 89
     assert data["meals"]["lunch"]["calories_kcal"] == 89
     assert data["meals"]["dinner"]["calories_kcal"] == 0
+    assert data["total"]["vitamin_k_ug"] is None
+    assert data["meals"]["dinner"]["vitamin_k_ug"] == 0
 
 
 def test_daily_stats_empty(client, db):
