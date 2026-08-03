@@ -2,28 +2,35 @@
 # Import USDA FoodData Central JSON into the production database.
 #
 # Usage:
-#   bin/import-usda <path-to-usda-json> [--csv-dir=<path-to-foundation-csv-dir>]
+#   bin/import-usda <path-to-usda-json> [--csv-dir=<path-to-foundation-csv-dir>] [--source=<code>]
 #
 # The file must be on the garageband host (e.g. /home/gregmushen/nutrition-data/).
 # The script detects the current running container image automatically.
 #
 # Download datasets from: https://fdc.nal.usda.gov/download-datasets
+#   - Survey (FNDDS) JSON  — gap-filled, most complete nutrient profiles
 #   - Foundation Foods JSON and CSV (CSV fills records omitted from JSON)
 #   - SR Legacy Foods JSON
+#
+# The dataset is detected from the export itself, so each food is tagged with
+# its specific USDA source (usda_fndds, usda_foundation, usda_sr_legacy,
+# usda_branded). Pass --source=<code> to override.
 
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: bin/import-usda <path-to-usda-json-on-host> [--csv-dir=<path-on-host>]" >&2
+  echo "Usage: bin/import-usda <path-to-usda-json-on-host> [--csv-dir=<path-on-host>] [--source=<code>]" >&2
   exit 1
 fi
 
 HOST_FILE="$1"
 shift
 CSV_DIR=""
+SOURCE=""
 for arg in "$@"; do
   case "$arg" in
     --csv-dir=*) CSV_DIR="${arg#*=}" ;;
+    --source=*) SOURCE="${arg#*=}" ;;
     *)
       echo "Unknown option: $arg" >&2
       exit 1
@@ -47,6 +54,12 @@ if [[ -n "$CSV_DIR" ]]; then
   CSV_ARG="--csv-dir=/nutrition-csv"
 fi
 
+SOURCE_ARG=""
+if [[ -n "$SOURCE" ]]; then
+  echo "Source override: $SOURCE"
+  SOURCE_ARG="--source=$SOURCE"
+fi
+
 $SSH "docker run --rm \
   -v \$(dirname '$HOST_FILE'):/nutrition-data \
   $CSV_MOUNT \
@@ -56,4 +69,5 @@ $SSH "docker run --rm \
   -m scripts.import_usda \
   /nutrition-data/\$(basename '$HOST_FILE') \
   /data/nutrition.db \
-  $CSV_ARG"
+  $CSV_ARG \
+  $SOURCE_ARG"

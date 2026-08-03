@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Request
-from app.models.activity import StepImportRequest, DailyActivity
+
+from app.auth import current_user_id
+from app.models.activity import DailyActivity, StepImportRequest
 from app.repositories.activity import ActivityRepository
 from app.services.activity_import import import_steps
-from app.config import settings
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -15,7 +16,7 @@ def import_activity_steps(request: Request, body: StepImportRequest):
     repo = ActivityRepository(request.app.state.db)
     return import_steps(
         repo=repo,
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         source=body.source,
         observed_at=body.observed_at,
         period_start=body.period_start,

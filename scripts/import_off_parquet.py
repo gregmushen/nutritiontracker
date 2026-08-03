@@ -12,16 +12,42 @@ from app.database import get_connection, init_schema
 from app.providers.open_food_facts import normalize_off_food
 from app.repositories.foods import FoodRepository
 
-
 PARQUET_COLUMNS = (
     "code",
     "product_name",
     "brands",
+    "allergens_tags",
+    "ingredients_analysis_tags",
+    "categories_tags",
+    "labels_tags",
     "countries_tags",
+    "ingredients_text",
+    "nutriscore_grade",
+    "nova_group",
+    "product_quantity",
+    "product_quantity_unit",
     "serving_quantity",
     "serving_size",
     "nutriments",
 )
+
+REQUIRED_PARQUET_COLUMNS = frozenset({"code", "product_name", "nutriments"})
+
+NORMALIZED_FIELDS_BY_COLUMN = {
+    "brands": ("brand",),
+    "allergens_tags": ("allergens_tags",),
+    "ingredients_analysis_tags": ("dietary_tags",),
+    "categories_tags": ("categories_tags",),
+    "labels_tags": ("labels_tags",),
+    "countries_tags": ("countries_tags",),
+    "ingredients_text": ("ingredients_text",),
+    "nutriscore_grade": ("nutriscore_grade",),
+    "nova_group": ("nova_group",),
+    "product_quantity": ("product_quantity",),
+    "product_quantity_unit": ("product_quantity_unit",),
+    "serving_quantity": ("serving_quantity", "serving_unit"),
+    "serving_size": ("serving_size_text",),
+}
 
 
 def _product_name(names: list[dict] | None) -> str:
@@ -41,13 +67,27 @@ def parquet_row_to_off_product(row: dict) -> dict:
         name = nutrient.get("name")
         if not name:
             continue
+        # Only `100g` is carried over. The dump's `unit` column describes the
+        # contributor-entered `value`/`serving` fields, not `100g`, which OFF
+        # always normalizes to grams (kcal for energy). Forwarding it as
+        # `<name>_unit` would make the normalizer rescale an already-normalized
+        # figure — e.g. salt `value=1785 unit=mg` alongside `100g=12.7` grams.
         nutriments[f"{name}_100g"] = nutrient.get("100g")
-        nutriments[f"{name}_unit"] = nutrient.get("unit")
 
     return {
         "code": row.get("code") or "",
         "product_name": _product_name(row.get("product_name")),
         "brands": row.get("brands"),
+        "allergens_tags": row.get("allergens_tags") or [],
+        "ingredients_analysis_tags": row.get("ingredients_analysis_tags") or [],
+        "categories_tags": row.get("categories_tags") or [],
+        "labels_tags": row.get("labels_tags") or [],
+        "countries_tags": row.get("countries_tags") or [],
+        "ingredients_text": _product_name(row.get("ingredients_text")),
+        "nutriscore_grade": row.get("nutriscore_grade"),
+        "nova_group": row.get("nova_group"),
+        "product_quantity": row.get("product_quantity"),
+        "product_quantity_unit": row.get("product_quantity_unit"),
         "serving_quantity": row.get("serving_quantity"),
         "serving_size": row.get("serving_size"),
         "nutriments": nutriments,
@@ -72,16 +112,34 @@ def import_off_parquet(
     imported = 0
     skipped = 0
     parquet_file = pq.ParquetFile(file_path)
-    for batch in parquet_file.iter_batches(batch_size=10_000, columns=PARQUET_COLUMNS):
+    available_columns = frozenset(parquet_file.schema_arrow.names)
+    required_columns = set(REQUIRED_PARQUET_COLUMNS)
+    if country:
+        required_columns.add("countries_tags")
+    missing_columns = sorted(required_columns - available_columns)
+    if missing_columns:
+        raise ValueError(
+            "Open Food Facts Parquet file is missing required columns: "
+            + ", ".join(missing_columns)
+        )
+    columns = [
+        column for column in PARQUET_COLUMNS if column in available_columns
+    ]
+    for batch in parquet_file.iter_batches(batch_size=10_000, columns=columns):
         for row in batch.to_pylist():
             if country and country not in (row.get("countries_tags") or []):
                 skipped += 1
                 continue
             raw = parquet_row_to_off_product(row)
-            if not raw["product_name"]:
+            if not raw["code"] or not raw["product_name"]:
                 skipped += 1
                 continue
-            repo.create_no_commit(**normalize_off_food(raw))
+            normalized = normalize_off_food(raw)
+            for column, fields in NORMALIZED_FIELDS_BY_COLUMN.items():
+                if column not in available_columns:
+                    for field in fields:
+                        normalized.pop(field, None)
+            repo.create_no_commit(**normalized)
             imported += 1
             if imported % 5_000 == 0:
                 conn.commit()
