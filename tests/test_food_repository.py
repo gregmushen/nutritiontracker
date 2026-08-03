@@ -41,10 +41,18 @@ def test_search_prefix(repo):
 
 def test_search_with_source_filter(repo):
     repo.create(source="open_food_facts", name="Oats OFF")
-    repo.create(source="food_data_central", name="Oats USDA")
-    results = repo.search("oats", source="food_data_central")
+    repo.create(source="usda_sr_legacy", name="Oats USDA")
+    results = repo.search("oats", sources=("usda_sr_legacy",))
     assert len(results) == 1
     assert results[0]["name"] == "Oats USDA"
+
+
+def test_search_with_multiple_source_filter(repo):
+    repo.create(source="open_food_facts", name="Oats OFF")
+    repo.create(source="usda_sr_legacy", name="Oats SR")
+    repo.create(source="usda_fndds", name="Oats FNDDS")
+    results = repo.search("oats", sources=("usda_sr_legacy", "usda_fndds"))
+    assert {r["name"] for r in results} == {"Oats SR", "Oats FNDDS"}
 
 
 def test_search_limit_offset(repo):

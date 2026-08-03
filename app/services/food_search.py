@@ -1,11 +1,31 @@
-from app.repositories.foods import FoodRepository
 from app.models.food import NutrientsPer100
+from app.repositories.foods import FoodRepository
+from app.sources import resolve_source_filter, source_tier
 
 NUTRIENT_FIELDS = list(NutrientsPer100.model_fields.keys())
 
 
-def _nutrient_completeness(food: dict) -> int:
+def _known_nutrients(food: dict) -> int:
+    """How many nutrients the source actually reports (NULL means unknown)."""
+    return sum(1 for f in NUTRIENT_FIELDS if food.get(f) is not None)
+
+
+def _reported_nutrients(food: dict) -> int:
     return sum(1 for f in NUTRIENT_FIELDS if (food.get(f) or 0) > 0)
+
+
+def _quality_rank(food: dict) -> tuple[int, int, int]:
+    """Sort key for picking a winner among duplicates — lower is better.
+
+    Source tier leads: a research-grade dataset beats label data even when the
+    label happens to list more numbers. Nutrient counts only break ties within
+    a tier.
+    """
+    return (
+        source_tier(food.get("source")),
+        -_known_nutrients(food),
+        -_reported_nutrients(food),
+    )
 
 
 def _normalize_name(name: str) -> str:
@@ -17,11 +37,17 @@ class FoodSearchService:
         self.repo = repo
 
     def search(
-        self, query: str, *, source: str | None = None,
+        self, query: str, *, source: str | None = None, user_id: int | None = None,
         limit: int = 20, offset: int = 0,
     ) -> list[dict]:
         # Fetch extra results to allow for dedup shrinkage
-        raw = self.repo.search(query, source=source, limit=limit * 2, offset=offset)
+        raw = self.repo.search(
+            query,
+            sources=resolve_source_filter(source),
+            user_id=user_id,
+            limit=limit * 2,
+            offset=offset,
+        )
         deduped = self._deduplicate(raw)
         return deduped[:limit]
 
@@ -42,7 +68,7 @@ class FoodSearchService:
 
             if dup_idx is not None:
                 existing = result[dup_idx]
-                if _nutrient_completeness(food) > _nutrient_completeness(existing):
+                if _quality_rank(food) < _quality_rank(existing):
                     result[dup_idx] = food
                 continue
 

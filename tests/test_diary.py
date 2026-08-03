@@ -1,6 +1,7 @@
 import pytest
 from app.repositories.foods import FoodRepository
 from app.repositories.diary import DiaryRepository
+from app.services.diary import compute_entry_nutrients
 
 
 @pytest.fixture
@@ -159,3 +160,12 @@ def test_search_by_food_name_does_not_return_other_users_entries(diary_repo, ban
     results = diary_repo.search_by_food_name(user_id=1, query="Banana")
     assert len(results) == 1
     assert results[0]["user_id"] == 1
+
+
+def test_computed_nutrients_preserve_unknown_and_measured_zero():
+    nutrients = compute_entry_nutrients(
+        {"protein_g": 0, "vitamin_k_ug": None}, grams=100
+    )
+
+    assert nutrients["protein_g"] == 0
+    assert nutrients["vitamin_k_ug"] is None
