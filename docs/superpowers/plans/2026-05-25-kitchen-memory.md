@@ -1257,7 +1257,7 @@ Append:
 Create inventory:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/inventory \
+curl -s -X POST https://nutrition.example.com/kitchen/inventory \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Eggs","status":"have","location":"fridge"}'
@@ -1266,7 +1266,7 @@ curl -s -X POST https://n.paracosmlab.com/kitchen/inventory \
 Create a favorite meal:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/meals \
+curl -s -X POST https://nutrition.example.com/kitchen/meals \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Spinach Eggs","tags":["breakfast","high_protein"],"effort":"low","ingredients":[{"name":"Eggs","role":"required"},{"name":"Spinach","role":"optional"}]}'
@@ -1275,7 +1275,7 @@ curl -s -X POST https://n.paracosmlab.com/kitchen/meals \
 Rank meals:
 
 ```bash
-curl -s -X POST https://n.paracosmlab.com/kitchen/matches \
+curl -s -X POST https://nutrition.example.com/kitchen/matches \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"effort":"low"}'

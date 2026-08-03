@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Install (or re-install) the app as a systemd service on a small Linux host.
+#
+# Usage:
+#   bin/install-systemd
+#
+# This is the low-resource deployment path: a plain git checkout, a virtualenv
+# and one systemd unit. No container runtime, no registry, no build step, which
+# is what makes it viable on a Raspberry Pi or an equivalent small box.
+#
+# The script is idempotent. The bearer token survives re-runs while managed
+# settings are reconciled with deploy/deploy.env.
+
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
+
+require_vars NT_DEPLOY_DIR NT_DEPLOY_SERVICE NT_DEPLOY_DB
+umask 077
+
+if [[ $# -gt 0 ]]; then
+  echo "Unknown option: $1" >&2
+  exit 1
+fi
+
+REPO_URL="${NT_REPO_URL:-https://github.com/gregmushen/nutritiontracker.git}"
+BRANCH="${NT_DEPLOY_BRANCH:-main}"
+GROUP="${NT_DEPLOY_GROUP:-$NT_DEPLOY_USER}"
+BIND_HOST="${NT_BIND_HOST:-127.0.0.1}"
+PORT="${NT_APP_PORT:-8000}"
+ENV_FILE="${NT_DEPLOY_ENV_FILE:-/etc/nutritiontracker/nutritiontracker.env}"
+MEMORY_HIGH="${NT_MEMORY_HIGH:-512M}"
+MEMORY_MAX="${NT_MEMORY_MAX:-768M}"
+TASKS_MAX="${NT_TASKS_MAX:-64}"
+CPU_WEIGHT="${NT_CPU_WEIGHT:-100}"
+DATA_DIR="$(dirname "$NT_DEPLOY_DB")"
+
+TEMPLATE="$REPO_ROOT/deploy/systemd/nutritiontracker.service.template"
+[[ -f "$TEMPLATE" ]] || { echo "Missing $TEMPLATE" >&2; exit 1; }
+
+echo "Installing $NT_DEPLOY_SERVICE on $NT_DEPLOY_HOST"
+echo "  checkout : $NT_DEPLOY_DIR ($BRANCH)"
+echo "  database : $NT_DEPLOY_DB"
+echo "  listen   : $BIND_HOST:$PORT"
+echo "  memory   : high $MEMORY_HIGH / max $MEMORY_MAX"
+
+UNIT="$(sed \
+  -e "s|__USER__|$NT_DEPLOY_USER|g" \
+  -e "s|__GROUP__|$GROUP|g" \
+  -e "s|__DIR__|$NT_DEPLOY_DIR|g" \
+  -e "s|__ENV_FILE__|$ENV_FILE|g" \
+  -e "s|__BIND_HOST__|$BIND_HOST|g" \
+  -e "s|__PORT__|$PORT|g" \
+  -e "s|__SERVICE__|$NT_DEPLOY_SERVICE|g" \
+  -e "s|__DATA_DIR__|$DATA_DIR|g" \
+  -e "s|__MEMORY_HIGH__|$MEMORY_HIGH|g" \
+  -e "s|__MEMORY_MAX__|$MEMORY_MAX|g" \
+  -e "s|__TASKS_MAX__|$TASKS_MAX|g" \
+  -e "s|__CPU_WEIGHT__|$CPU_WEIGHT|g" \
+  "$TEMPLATE")"
+
+# Guard against shipping a half-rendered unit to a live host.
+if grep -q '__[A-Z_]*__' <<<"$UNIT"; then
+  echo "Unit still contains unrendered placeholders:" >&2
+  grep -o '__[A-Z_]*__' <<<"$UNIT" | sort -u >&2
+  exit 1
+fi
+
+remote "set -euo pipefail
+umask 077
+
+# 1. Checkout.
+if [[ ! -d '$NT_DEPLOY_DIR/.git' ]]; then
+  echo 'Cloning $REPO_URL'
+  git clone --branch '$BRANCH' '$REPO_URL' '$NT_DEPLOY_DIR'
+fi
+cd '$NT_DEPLOY_DIR'
+install -d -m 700 '$DATA_DIR'
+chmod 700 '$DATA_DIR'
+
+# 2. Virtualenv. Created only once; refreshed on every run.
+if [[ ! -x '$NT_DEPLOY_DIR/.venv/bin/python' ]]; then
+  echo 'Creating virtualenv'
+  python3 -m venv '$NT_DEPLOY_DIR/.venv'
+fi
+'$NT_DEPLOY_DIR/.venv/bin/pip' install -q --upgrade pip
+'$NT_DEPLOY_DIR/.venv/bin/pip' install -q -e .
+
+# 3. Environment file. Preserve the token, but reconcile managed settings.
+#    The check runs under sudo because the directory is usually root-only, and
+#    an unprivileged test would silently fall through and rotate the token.
+#    It also has to fail closed: a truncated or hand-edited file that no longer
+#    declares a token would otherwise be kept, and the app treats a missing
+#    NT_BEARER_TOKEN as \"nothing to authenticate against\" and serves anonymously.
+sudo install -d -o root -g '$GROUP' -m 750 \"\$(dirname '$ENV_FILE')\"
+if sudo test -f '$ENV_FILE'; then
+  TOKEN=\$(sudo sed -n 's/^NT_BEARER_TOKEN=//p' '$ENV_FILE' | head -n 1)
+  if [[ -z \"\$TOKEN\" ]]; then
+    echo 'ERROR: $ENV_FILE exists but declares no NT_BEARER_TOKEN.' >&2
+    echo 'Refusing to continue: starting without a token disables authentication.' >&2
+    echo 'Fix or remove the file, then re-run.' >&2
+    exit 1
+  fi
+  echo 'Preserving the existing bearer token in $ENV_FILE'
+else
+  echo 'Generating $ENV_FILE with a fresh bearer token'
+  TOKEN=\$('$NT_DEPLOY_DIR/.venv/bin/python' -c 'import secrets; print(secrets.token_urlsafe(32))')
+fi
+ENV_TMP=\$(mktemp)
+printf 'NT_DB_PATH=%s\nNT_BEARER_TOKEN=%s\nNT_MULTI_USER_ENABLED=%s\n' \
+  '$NT_DEPLOY_DB' \"\$TOKEN\" '${NT_MULTI_USER_ENABLED:-true}' > \"\$ENV_TMP\"
+sudo install -o root -g '$GROUP' -m 640 \"\$ENV_TMP\" '$ENV_FILE'
+rm -f \"\$ENV_TMP\"
+
+# 4. Schema.
+NT_DB_PATH='$NT_DEPLOY_DB' '$NT_DEPLOY_DIR/.venv/bin/alembic' upgrade head
+chmod 600 '$NT_DEPLOY_DB'"
+
+# 5. Unit. Stage it in a root-owned file so another local user cannot replace
+#    the content between upload and privileged installation.
+printf '%s\n' "$UNIT" | remote "set -euo pipefail
+UNIT_TMP=\$(sudo mktemp '/etc/systemd/system/.$NT_DEPLOY_SERVICE.service.XXXXXX')
+cleanup() { sudo rm -f \"\$UNIT_TMP\"; }
+trap cleanup EXIT
+sudo tee \"\$UNIT_TMP\" >/dev/null
+sudo chmod 644 \"\$UNIT_TMP\"
+sudo mv \"\$UNIT_TMP\" '/etc/systemd/system/$NT_DEPLOY_SERVICE.service'
+trap - EXIT
+sudo systemctl daemon-reload
+sudo systemctl enable '$NT_DEPLOY_SERVICE'
+sudo systemctl restart '$NT_DEPLOY_SERVICE'
+sleep 3
+systemctl is-active '$NT_DEPLOY_SERVICE'"
+
+echo "Checking health"
+remote "curl -fsS http://127.0.0.1:$PORT/health" && echo
+echo "Installed."

@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request
-from app.models.weight import WeightEntryCreate, WeightEntryUpdate, WeightEntry
+
+from app.auth import current_user_id
+from app.models.weight import WeightEntry, WeightEntryCreate, WeightEntryUpdate
 from app.repositories.weight import WeightRepository
-from app.config import settings
 
 router = APIRouter(prefix="/weight", tags=["weight"])
 
@@ -15,7 +16,7 @@ def create_weight(request: Request, body: WeightEntryCreate):
     """Log a body weight measurement for a date."""
     repo = _repo(request)
     wid = repo.create(
-        user_id=settings.default_user_id,
+        user_id=current_user_id(request),
         date=body.date, weight_kg=body.weight_kg, notes=body.notes,
     )
     return repo.get(wid)
@@ -30,11 +31,11 @@ def list_weight(
     repo = _repo(request)
     if date:
         return repo.list_by_date_range(
-            user_id=settings.default_user_id, start=date, end=date
+            user_id=current_user_id(request), start=date, end=date
         )
     if start and end:
         return repo.list_by_date_range(
-            user_id=settings.default_user_id, start=start, end=end
+            user_id=current_user_id(request), start=start, end=end
         )
     raise HTTPException(400, "Provide date or start+end parameters")
 
@@ -43,7 +44,8 @@ def list_weight(
 def update_weight(request: Request, entry_id: int, body: WeightEntryUpdate):
     """Update a weight entry."""
     repo = _repo(request)
-    if not repo.get(entry_id):
+    entry = repo.get(entry_id)
+    if not entry or entry["user_id"] != current_user_id(request):
         raise HTTPException(404, "Weight entry not found")
     updates = body.model_dump(exclude_unset=True)
     repo.update(entry_id, **updates)
@@ -53,5 +55,9 @@ def update_weight(request: Request, entry_id: int, body: WeightEntryUpdate):
 @router.delete("/{entry_id}", status_code=204, summary="Delete weight entry")
 def delete_weight(request: Request, entry_id: int):
     """Delete a weight entry."""
-    if not _repo(request).delete(entry_id):
+    repo = _repo(request)
+    entry = repo.get(entry_id)
+    if not entry or entry["user_id"] != current_user_id(request):
+        raise HTTPException(404, "Weight entry not found")
+    if not repo.delete(entry_id):
         raise HTTPException(404, "Weight entry not found")

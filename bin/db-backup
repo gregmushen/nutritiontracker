@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Back up the live database on the deployment host.
+#
+# Usage:
+#   bin/db-backup [--pull <local-path>]
+#
+# Uses SQLite's online backup API, so the copy is consistent even while the
+# service is serving requests and holding a WAL.
+
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
+
+require_vars NT_DEPLOY_DIR NT_DEPLOY_SERVICE NT_DEPLOY_DB
+umask 077
+
+PULL_TO=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pull) PULL_TO="$2"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+STAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_DIR="${NT_DEPLOY_BACKUP_DIR:-$NT_DEPLOY_DIR/backups}"
+REMOTE_BACKUP="$BACKUP_DIR/nutrition-$STAMP.db"
+
+echo "Backing up $NT_DEPLOY_DB on $NT_DEPLOY_HOST"
+remote "set -e
+umask 077
+install -d -m 700 '$BACKUP_DIR'
+cd '$NT_DEPLOY_DIR'
+.venv/bin/python - <<'PY'
+import sqlite3
+src = sqlite3.connect('file:$NT_DEPLOY_DB?mode=ro', uri=True)
+dst = sqlite3.connect('$REMOTE_BACKUP')
+src.backup(dst)
+dst.close(); src.close()
+print('backup written')
+PY
+chmod 600 '$REMOTE_BACKUP'"
+
+echo "Remote backup: $REMOTE_BACKUP"
+
+if [[ -n "$PULL_TO" ]]; then
+  echo "Pulling to $PULL_TO"
+  rsync -az --info=progress2 -e "$RSYNC_SSH" "$TARGET:$REMOTE_BACKUP" "$PULL_TO"
+  echo "Local copy: $PULL_TO"
+fi
