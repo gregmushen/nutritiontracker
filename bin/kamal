@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run Kamal with the same gitignored deployment environment as the bin scripts.
+
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
+
+exec kamal "$@"

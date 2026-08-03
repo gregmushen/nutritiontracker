@@ -4,8 +4,17 @@ import os
 import click
 import httpx
 
-WT_BASE = os.environ.get("WT_BASE_URL", "https://wt.paracosmlab.com")
+WT_BASE = os.environ.get("WT_BASE_URL", "")
 WT_TOKEN = os.environ.get("WT_BEARER_TOKEN", "")
+
+
+def _base() -> str:
+    if not WT_BASE:
+        raise click.ClickException(
+            "WT_BASE_URL is not set. Point it at your workout tracker, e.g. "
+            "export WT_BASE_URL=https://workouts.example.com"
+        )
+    return WT_BASE.rstrip("/")
 
 
 def _headers() -> dict:
@@ -13,7 +22,7 @@ def _headers() -> dict:
 
 
 def _get(path: str, **params) -> dict | list:
-    r = httpx.get(f"{WT_BASE}{path}", headers=_headers(), params=params, timeout=10)
+    r = httpx.get(f"{_base()}{path}", headers=_headers(), params=params, timeout=10)
     r.raise_for_status()
     return r.json()
 

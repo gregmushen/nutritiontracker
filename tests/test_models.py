@@ -6,13 +6,21 @@ from app.models.recipe import RecipeCreate, RecipeIngredientInput
 from app.models.weight import WeightEntryCreate
 
 
-def test_nutrients_defaults_to_zeros():
+def test_nutrients_default_to_unknown():
+    """Unset nutrients are None (not measured), never 0 (measured as zero)."""
     n = NutrientsPer100()
+    assert n.calories_kcal is None
+    assert n.protein_g is None
+    assert n.niacin_mg is None
+    assert n.caffeine_mg is None
+    assert n.riboflavin_mg is None
+
+
+def test_nutrients_keep_explicit_zero():
+    n = NutrientsPer100(calories_kcal=0, protein_g=1.5)
     assert n.calories_kcal == 0
-    assert n.protein_g == 0
-    assert n.niacin_mg == 0
-    assert n.caffeine_mg == 0
-    assert n.riboflavin_mg == 0
+    assert n.protein_g == 1.5
+    assert n.fiber_g is None
 
 
 def test_food_create_minimal():
@@ -24,6 +32,23 @@ def test_food_create_minimal():
 def test_food_create_rejects_invalid_source():
     with pytest.raises(ValueError):
         FoodCreate(name="X", source="invalid")
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        {"base_quantity": 0},
+        {"base_quantity": -1},
+        {"base_unit": "oz"},
+        {"density_g_per_ml": 0},
+        {"density_g_per_ml": -1},
+        {"base_quantity": float("inf")},
+        {"density_g_per_ml": float("inf")},
+    ),
+)
+def test_food_create_rejects_invalid_base_measurements(field):
+    with pytest.raises(ValueError):
+        FoodCreate(name="Invalid", **field)
 
 
 def test_diary_entry_create():

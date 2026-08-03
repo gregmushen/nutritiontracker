@@ -2,39 +2,47 @@
 # Import USDA FoodData Central JSON into the production database.
 #
 # Usage:
-#   bin/import-usda <path-to-usda-json> [--csv-dir=<path-to-foundation-csv-dir>]
+#   bin/import-usda <path-to-usda-json> [--csv-dir=<path-to-foundation-csv-dir>] [--source=<code>]
 #
-# The file must be on the garageband host (e.g. /home/gregmushen/nutrition-data/).
+# The file must already be on the deployment host (see deploy/deploy.env).
 # The script detects the current running container image automatically.
 #
 # Download datasets from: https://fdc.nal.usda.gov/download-datasets
+#   - Survey (FNDDS) JSON  — gap-filled, most complete nutrient profiles
 #   - Foundation Foods JSON and CSV (CSV fills records omitted from JSON)
 #   - SR Legacy Foods JSON
+#
+# The dataset is detected from the export itself, so each food is tagged with
+# its specific USDA source (usda_fndds, usda_foundation, usda_sr_legacy,
+# usda_branded). Pass --source=<code> to override.
 
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: bin/import-usda <path-to-usda-json-on-host> [--csv-dir=<path-on-host>]" >&2
+  echo "Usage: bin/import-usda <path-to-usda-json-on-host> [--csv-dir=<path-on-host>] [--source=<code>]" >&2
   exit 1
 fi
 
 HOST_FILE="$1"
 shift
 CSV_DIR=""
+SOURCE=""
 for arg in "$@"; do
   case "$arg" in
     --csv-dir=*) CSV_DIR="${arg#*=}" ;;
+    --source=*) SOURCE="${arg#*=}" ;;
     *)
       echo "Unknown option: $arg" >&2
       exit 1
       ;;
   esac
 done
-HOST="192.168.60.55"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/stupidclaw_garageband_ed25519}"
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no gregmushen@$HOST"
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
 
-IMAGE=$($SSH "docker inspect \$(docker ps --filter name=nutritiontracker-web --format '{{.Names}}' | head -1) --format '{{.Config.Image}}'")
+# Use the `remote` helper rather than rebuilding a scalar ssh command:
+# flattening SSH_OPTS into a string re-splits an SSH key path that
+# contains a space, which deploy.env is documented as allowing.
+IMAGE=$(remote "docker inspect \$(docker ps --filter name=nutritiontracker-web --format '{{.Names}}' | head -1) --format '{{.Config.Image}}'")
 
 echo "Using image: $IMAGE"
 echo "Importing: $HOST_FILE"
@@ -47,7 +55,13 @@ if [[ -n "$CSV_DIR" ]]; then
   CSV_ARG="--csv-dir=/nutrition-csv"
 fi
 
-$SSH "docker run --rm \
+SOURCE_ARG=""
+if [[ -n "$SOURCE" ]]; then
+  echo "Source override: $SOURCE"
+  SOURCE_ARG="--source=$SOURCE"
+fi
+
+remote "docker run --rm \
   -v \$(dirname '$HOST_FILE'):/nutrition-data \
   $CSV_MOUNT \
   -v nutritiontracker_data:/data \
@@ -56,4 +70,5 @@ $SSH "docker run --rm \
   -m scripts.import_usda \
   /nutrition-data/\$(basename '$HOST_FILE') \
   /data/nutrition.db \
-  $CSV_ARG"
+  $CSV_ARG \
+  $SOURCE_ARG"

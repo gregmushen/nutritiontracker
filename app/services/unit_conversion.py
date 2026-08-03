@@ -23,6 +23,20 @@ PORTION_UNITS = {"serving", "piece", "slice"}
 class ConversionResult:
     grams: float
     approximate: bool
+    milliliters: float | None = None
+
+    def amount_in(self, base_unit: str) -> float:
+        normalized = base_unit.lower().strip()
+        if normalized == "g":
+            return self.grams
+        if normalized == "ml":
+            if self.milliliters is None:
+                raise ValueError(
+                    "Cannot convert a weight amount to a volume-based food "
+                    "without density_g_per_ml"
+                )
+            return self.milliliters
+        raise ValueError(f"Unsupported food base unit: '{base_unit}'")
 
 
 def convert_to_grams(
@@ -33,15 +47,27 @@ def convert_to_grams(
     serving_unit: str | None = None,
 ) -> ConversionResult:
     unit = unit.lower().strip()
+    if density_g_per_ml is not None and density_g_per_ml <= 0:
+        raise ValueError("density_g_per_ml must be greater than zero")
 
     if unit in WEIGHT_TO_GRAMS:
-        return ConversionResult(grams=amount * WEIGHT_TO_GRAMS[unit], approximate=False)
+        grams = amount * WEIGHT_TO_GRAMS[unit]
+        milliliters = (
+            grams / density_g_per_ml if density_g_per_ml is not None else None
+        )
+        return ConversionResult(
+            grams=grams, approximate=False, milliliters=milliliters
+        )
 
     if unit in VOLUME_TO_ML:
         ml = amount * VOLUME_TO_ML[unit]
         if density_g_per_ml is not None:
-            return ConversionResult(grams=ml * density_g_per_ml, approximate=False)
-        return ConversionResult(grams=ml * 1.0, approximate=True)
+            return ConversionResult(
+                grams=ml * density_g_per_ml,
+                approximate=False,
+                milliliters=ml,
+            )
+        return ConversionResult(grams=ml, approximate=True, milliliters=ml)
 
     if unit in PORTION_UNITS:
         if serving_quantity is None or serving_unit is None:
@@ -52,6 +78,11 @@ def convert_to_grams(
         return ConversionResult(
             grams=amount * per_serving.grams,
             approximate=per_serving.approximate,
+            milliliters=(
+                None
+                if per_serving.milliliters is None
+                else amount * per_serving.milliliters
+            ),
         )
 
     raise ValueError(f"Unsupported unit: '{unit}'")

@@ -134,7 +134,7 @@ Example config:
 
 ```json
 {
-  "base_url": "https://n.paracosmlab.com",
+  "base_url": "https://nutrition.example.com",
   "token": "<redacted>",
   "timeout": "10s"
 }
@@ -456,7 +456,7 @@ This repo is a working example of the target API shape.
 Useful OpenAPI source:
 
 ```text
-https://n.paracosmlab.com/openapi.json
+https://nutrition.example.com/openapi.json
 ```
 
 Useful domains:

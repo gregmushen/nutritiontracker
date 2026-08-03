@@ -9,4 +9,9 @@ build/
 .pytest_cache/
 data/
 .env
+*.env
 .kamal/secrets
+
+# Deployment target settings (host names, users, key paths)
+deploy/deploy.env
+.kamal/deploy.yml

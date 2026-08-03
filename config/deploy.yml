@@ -1,12 +1,15 @@
 service: nutritiontracker
 image: nutritiontracker
 
+# Host-specific values come from the environment so they stay out of the repo.
+# Locally these are supplied by deploy/deploy.env (gitignored); in CI they come
+# from pipeline secrets. See deploy/deploy.env.example.
 servers:
   web:
-    - 192.168.60.55
+    - <%= ENV.fetch("NT_DEPLOY_HOST") %>
 
 registry:
-  server: 192.168.60.55:5000
+  server: <%= ENV.fetch("NT_REGISTRY_HOST", ENV.fetch("NT_DEPLOY_HOST")) %>:5000
   username: kamal
   password:
     - KAMAL_REGISTRY_PASSWORD
@@ -21,7 +24,7 @@ volumes:
   - nutritiontracker_data:/data
 
 proxy:
-  host: n.paracosmlab.com
+  host: <%= ENV.fetch("NT_PUBLIC_HOST") %>
   app_port: 8000
   healthcheck:
     path: /health
@@ -29,18 +32,20 @@ proxy:
     timeout: 10
 
 builder:
-  arch: amd64
+  arch: <%= ENV.fetch("NT_DEPLOY_ARCH", "amd64") %>
   driver: docker
 
 ssh:
-  user: gregmushen
+  user: <%= ENV.fetch("NT_DEPLOY_USER") %>
+<% if ENV["NT_DEPLOY_SSH_KEY"] && !ENV["NT_DEPLOY_SSH_KEY"].empty? %>
   keys:
-    - ~/.ssh/stupidclaw_garageband_ed25519
+    - <%= ENV["NT_DEPLOY_SSH_KEY"] %>
+<% end %>
 
 accessories:
   cloudflared:
     image: cloudflare/cloudflared:latest
-    host: 192.168.60.55
+    host: <%= ENV.fetch("NT_DEPLOY_HOST") %>
     cmd: tunnel --no-autoupdate run
     env:
       secret:

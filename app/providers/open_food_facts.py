@@ -1,8 +1,16 @@
 import httpx
 
+from app.models.food import NUTRIENT_FIELDS
+
 OFF_API_URL = "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
 OFF_TIMEOUT = 5.0  # seconds
 
+# field -> (OFF nutrient keys, unit OFF stores the per-100g value in, our unit).
+#
+# The middle element is the unit of the `<nutrient>_100g` figure, which OFF
+# always normalizes: grams for every nutrient, kcal for energy. It is *not* the
+# `<nutrient>_unit` the contributor typed in — that one describes the raw
+# `value`/`serving` fields and is only used as an override when present.
 OFF_NUTRIENT_MAP = {
     "calories_kcal": (("energy-kcal",), "kcal", "kcal"),
     "protein_g": (("proteins",), "g", "g"),
@@ -15,34 +23,34 @@ OFF_NUTRIENT_MAP = {
     "monounsaturated_fat_g": (("monounsaturated-fat",), "g", "g"),
     "polyunsaturated_fat_g": (("polyunsaturated-fat",), "g", "g"),
     "fiber_g": (("fiber",), "g", "g"),
-    "cholesterol_mg": (("cholesterol",), "mg", "mg"),
-    "caffeine_mg": (("caffeine",), "mg", "mg"),
+    "cholesterol_mg": (("cholesterol",), "g", "mg"),
+    "caffeine_mg": (("caffeine",), "g", "mg"),
     "sodium_mg": (("sodium",), "g", "mg"),
-    "potassium_mg": (("potassium",), "mg", "mg"),
-    "calcium_mg": (("calcium",), "mg", "mg"),
-    "iron_mg": (("iron",), "mg", "mg"),
-    "magnesium_mg": (("magnesium",), "mg", "mg"),
-    "zinc_mg": (("zinc",), "mg", "mg"),
-    "phosphorus_mg": (("phosphorus",), "mg", "mg"),
-    "copper_mg": (("copper",), "mg", "mg"),
-    "manganese_mg": (("manganese",), "mg", "mg"),
-    "selenium_ug": (("selenium",), "ug", "ug"),
-    "chromium_ug": (("chromium",), "ug", "ug"),
-    "iodine_ug": (("iodine",), "ug", "ug"),
-    "vitamin_a_ug": (("vitamin-a",), "ug", "ug"),
-    "vitamin_c_mg": (("vitamin-c",), "mg", "mg"),
-    "vitamin_d_ug": (("vitamin-d",), "ug", "ug"),
-    "vitamin_e_mg": (("vitamin-e",), "mg", "mg"),
-    "vitamin_k_ug": (("vitamin-k",), "ug", "ug"),
-    "thiamin_mg": (("vitamin-b1",), "mg", "mg"),
-    "riboflavin_mg": (("vitamin-b2",), "mg", "mg"),
-    "vitamin_b6_mg": (("vitamin-b6",), "mg", "mg"),
-    "vitamin_b12_ug": (("vitamin-b12",), "ug", "ug"),
-    "niacin_mg": (("vitamin-pp", "niacin"), "mg", "mg"),
-    "pantothenic_acid_mg": (("pantothenic-acid",), "mg", "mg"),
-    "biotin_ug": (("biotin",), "ug", "ug"),
-    "folate_ug": (("folates",), "ug", "ug"),
-    "folic_acid_ug": (("vitamin-b9",), "ug", "ug"),
+    "potassium_mg": (("potassium",), "g", "mg"),
+    "calcium_mg": (("calcium",), "g", "mg"),
+    "iron_mg": (("iron",), "g", "mg"),
+    "magnesium_mg": (("magnesium",), "g", "mg"),
+    "zinc_mg": (("zinc",), "g", "mg"),
+    "phosphorus_mg": (("phosphorus",), "g", "mg"),
+    "copper_mg": (("copper",), "g", "mg"),
+    "manganese_mg": (("manganese",), "g", "mg"),
+    "selenium_ug": (("selenium",), "g", "ug"),
+    "chromium_ug": (("chromium",), "g", "ug"),
+    "iodine_ug": (("iodine",), "g", "ug"),
+    "vitamin_a_ug": (("vitamin-a",), "g", "ug"),
+    "vitamin_c_mg": (("vitamin-c",), "g", "mg"),
+    "vitamin_d_ug": (("vitamin-d",), "g", "ug"),
+    "vitamin_e_mg": (("vitamin-e",), "g", "mg"),
+    "vitamin_k_ug": (("vitamin-k",), "g", "ug"),
+    "thiamin_mg": (("vitamin-b1",), "g", "mg"),
+    "riboflavin_mg": (("vitamin-b2",), "g", "mg"),
+    "vitamin_b6_mg": (("vitamin-b6",), "g", "mg"),
+    "vitamin_b12_ug": (("vitamin-b12",), "g", "ug"),
+    "niacin_mg": (("vitamin-pp", "niacin"), "g", "mg"),
+    "pantothenic_acid_mg": (("pantothenic-acid",), "g", "mg"),
+    "biotin_ug": (("biotin",), "g", "ug"),
+    "folate_ug": (("folates",), "g", "ug"),
+    "folic_acid_ug": (("vitamin-b9",), "g", "ug"),
     "choline_mg": (("choline",), "g", "mg"),
 }
 
@@ -54,7 +62,14 @@ _UNIT_FACTORS_TO_GRAMS = {
 }
 
 
-def _normalized_unit(unit: str) -> str:
+def _normalized_unit(unit: str | None, default: str) -> str:
+    """Canonicalize an OFF unit string, falling back when it is missing.
+
+    OFF leaves `unit` null or blank on a small number of records, so `default`
+    (the unit OFF stores the per-100g value in) stands in for those.
+    """
+    if not unit:
+        return default
     return unit.lower().replace("μ", "u").replace("µ", "u")
 
 
@@ -76,19 +91,34 @@ def _parse_serving_quantity(raw: dict) -> float | None:
         return None
 
 
+def _parse_product_quantity(raw: dict) -> float | None:
+    value = raw.get("product_quantity")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def _get_nutrient_value(
     nutriments: dict, source_keys: tuple[str, ...], default_unit: str, target_unit: str
-) -> float:
+) -> float | None:
+    """Return the converted per-100g value, or None when OFF does not report it.
+
+    None means "not known" so it stays distinguishable from a label that
+    genuinely declares zero.
+    """
     for source_key in source_keys:
         value = nutriments.get(f"{source_key}_100g")
         if value is None:
             continue
         try:
-            source_unit = _normalized_unit(nutriments.get(f"{source_key}_unit", default_unit))
+            source_unit = _normalized_unit(nutriments.get(f"{source_key}_unit"), default_unit)
             return _convert_unit(float(value), source_unit, target_unit)
-        except (KeyError, TypeError, ValueError):
-            return 0
-    return 0
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+    return None
 
 
 def normalize_off_food(raw: dict) -> dict:
@@ -108,6 +138,16 @@ def normalize_off_food(raw: dict) -> dict:
         "serving_quantity": _parse_serving_quantity(raw),
         "serving_unit": "g",
         "serving_size_text": raw.get("serving_size") or None,
+        "ingredients_text": raw.get("ingredients_text") or None,
+        "allergens_tags": raw.get("allergens_tags") or [],
+        "dietary_tags": raw.get("ingredients_analysis_tags") or [],
+        "categories_tags": raw.get("categories_tags") or [],
+        "labels_tags": raw.get("labels_tags") or [],
+        "countries_tags": raw.get("countries_tags") or [],
+        "nutriscore_grade": raw.get("nutriscore_grade") or None,
+        "nova_group": raw.get("nova_group"),
+        "product_quantity": _parse_product_quantity(raw),
+        "product_quantity_unit": raw.get("product_quantity_unit") or None,
         **nutrients,
     }
 
@@ -138,8 +178,8 @@ def fetch_off_by_barcode(barcode: str) -> dict | None:
         return None
 
     normalized = normalize_off_food(product)
-    # Only return if we actually got nutrient data
-    if normalized.get("calories_kcal", 0) == 0 and normalized.get("protein_g", 0) == 0:
+    # Zero is a reported measurement, not the absence of nutrient data.
+    if not any(normalized.get(field) is not None for field in NUTRIENT_FIELDS):
         return None
 
     return normalized

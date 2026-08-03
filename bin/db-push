@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Replace the live database with a locally built one, preserving personal data.
+#
+# Usage:
+#   bin/db-push <local-db>
+#
+# A rebuilt food catalog contains no diary, weight or recipe records, so the
+# live personal data is merged into the incoming file before anything is
+# swapped. The upload happens with the service running; the service is stopped
+# for the backup, merge and swap together, so nothing can be logged into the
+# database being replaced after the snapshot is taken.
+
+source "$(dirname "${BASH_SOURCE[0]}")/_deploy-env"
+
+require_vars NT_DEPLOY_DIR NT_DEPLOY_SERVICE NT_DEPLOY_DB
+umask 077
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: bin/db-push <local-db>" >&2
+  exit 1
+fi
+
+LOCAL_DB="$1"
+[[ -f "$LOCAL_DB" ]] || { echo "No such file: $LOCAL_DB" >&2; exit 1; }
+
+STAMP="$(date +%Y%m%d-%H%M%S)-$$"
+BACKUP_DIR="${NT_DEPLOY_BACKUP_DIR:-$NT_DEPLOY_DIR/backups}"
+REMOTE_BACKUP="$BACKUP_DIR/nutrition-preswap-$STAMP.db"
+REMOTE_INCOMING="$BACKUP_DIR/nutrition-incoming-$STAMP.db"
+
+# Upload first, with the service still running: this is the slow part and it
+# touches nothing live.
+echo "==> Uploading $(du -h "$LOCAL_DB" | cut -f1) to $NT_DEPLOY_HOST"
+remote "umask 077; install -d -m 700 '$BACKUP_DIR'"
+rsync -az --info=progress2 -e "$RSYNC_SSH" "$LOCAL_DB" "$TARGET:$REMOTE_INCOMING"
+remote "chmod 600 '$REMOTE_INCOMING'"
+
+# Everything that reads or replaces the live database happens with the service
+# stopped, inside one lock. Backing up while the app was still writing meant
+# any entry logged between the snapshot and the swap was silently dropped from
+# the merged result, and two overlapping runs could swap each other's files.
+echo "==> Stopping the service, then backing up, merging and swapping"
+remote "set -euo pipefail
+umask 077
+exec 9>'$BACKUP_DIR/.db-push.lock'
+flock -n 9 || { echo 'Another db-push is already running on this host' >&2; exit 1; }
+
+cd '$NT_DEPLOY_DIR'
+SERVICE_STOPPED=0
+SWAPPED=0
+cleanup() {
+  status=\$?
+  trap - EXIT
+  if [[ \$status -ne 0 ]]; then
+    set +e
+    if [[ \$SWAPPED -eq 1 ]]; then
+      sudo systemctl stop '$NT_DEPLOY_SERVICE'
+      rm -f '$NT_DEPLOY_DB' '$NT_DEPLOY_DB-wal' '$NT_DEPLOY_DB-shm'
+      mv '$NT_DEPLOY_DB.replaced-$STAMP' '$NT_DEPLOY_DB'
+    fi
+    if [[ \$SERVICE_STOPPED -eq 1 ]]; then
+      sudo systemctl start '$NT_DEPLOY_SERVICE'
+    fi
+    rm -f '$REMOTE_INCOMING'
+  fi
+  exit \$status
+}
+trap cleanup EXIT
+
+sudo systemctl stop '$NT_DEPLOY_SERVICE'
+SERVICE_STOPPED=1
+
+.venv/bin/python - <<'PY'
+import sqlite3
+src = sqlite3.connect('file:$NT_DEPLOY_DB?mode=ro', uri=True)
+dst = sqlite3.connect('$REMOTE_BACKUP')
+src.backup(dst); dst.close(); src.close()
+print('backup written')
+PY
+chmod 600 '$REMOTE_BACKUP'
+
+# Never destroy the live database on the strength of a backup we have not seen.
+test -s '$REMOTE_BACKUP' || { echo 'Backup is missing or empty; aborting' >&2; exit 1; }
+
+.venv/bin/python -m scripts.migrate_personal_data '$REMOTE_BACKUP' '$REMOTE_INCOMING'
+
+mv '$NT_DEPLOY_DB' '$NT_DEPLOY_DB.replaced-$STAMP'
+SWAPPED=1
+rm -f '$NT_DEPLOY_DB-wal' '$NT_DEPLOY_DB-shm'
+mv '$REMOTE_INCOMING' '$NT_DEPLOY_DB'
+chmod 600 '$NT_DEPLOY_DB'
+sudo systemctl start '$NT_DEPLOY_SERVICE'
+sleep 3
+systemctl is-active '$NT_DEPLOY_SERVICE'
+SERVICE_STOPPED=0
+SWAPPED=0
+trap - EXIT"
+
+echo "==> Health"
+remote "curl -fsS http://127.0.0.1:${NT_APP_PORT:-8000}/health" && echo
+echo "Previous database kept at $NT_DEPLOY_DB.replaced-$STAMP and $REMOTE_BACKUP"
